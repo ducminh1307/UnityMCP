@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gateway-and-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: server/pyproject.toml
+      - name: Install gateway and test dependencies
+        run: python -m pip install -e './server[dev]'
+      - name: Validate the 187-tool catalog and 48 C# registrations
+        run: python tools/validate_catalog.py
+      - name: Lint the Python gateway
+        run: ruff check server
+      - name: Test the Python gateway
+        run: pytest server/tests -q
+      - name: Compile Python sources
+        run: python -m compileall -q server/src
