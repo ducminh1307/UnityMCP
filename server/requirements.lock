@@ -1,0 +1,7 @@
+# Direct runtime dependencies pinned for the initial reproducible release.
+# Generate a fully transitive platform lock with uv/pip-tools before publishing.
+httpx==0.28.1
+jsonschema==4.25.1
+mcp[cli]==2.0.0
+uvicorn==0.35.0
+
