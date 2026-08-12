@@ -1,0 +1,31 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Unity validation projects and generated state
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+ValidationProject/
+
+# IDE / OS
+.idea/
+.vscode/
+.vs/
+*.csproj
+*.sln
+*.user
+.DS_Store
+Thumbs.db
+
+# Local UnityMCP instance state
+*.unitymcp.local.json
+
