@@ -6,13 +6,17 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 
 from .config import DEFAULT_LIMITS, default_descriptor_dir
-from .discovery import discover_instances, select_instance
+from .discovery import discover_instances, pid_is_alive, select_instance
 from .errors import ConfigurationError
+
+_PARENT_POLL_INTERVAL_SECONDS = 0.5
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,6 +27,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--transport", choices=("stdio", "streamable-http"), default="stdio")
     parser.add_argument("--port", type=int, default=8765, help="MCP Streamable HTTP loopback port")
     parser.add_argument("--mcp-path", default="/mcp", help="Streamable HTTP endpoint path")
+    parser.add_argument(
+        "--parent-pid",
+        type=int,
+        default=None,
+        help="For Streamable HTTP, exit when this Unity Editor or Player process exits",
+    )
     parser.add_argument(
         "--http-token",
         default=None,
@@ -53,7 +63,44 @@ async def _run_stdio(server) -> None:
         await server.run(read_stream, write_stream, options)
 
 
-def _run_http(server, port: int, path: str, log_level: str, token: str) -> None:
+def _is_process_alive(pid: int) -> bool:
+    """Reuse the descriptor liveness semantics for the launcher watchdog."""
+    return pid_is_alive(pid)
+
+
+def _emit_http_event(event: str, payload: dict[str, object]) -> None:
+    """Emit a machine-readable lifecycle event without contaminating stdio MCP."""
+    print(
+        f"UNITY_MCP_{event} {json.dumps(payload, ensure_ascii=False, separators=(',', ':'), sort_keys=True)}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _monitor_http_server(server, *, port: int, path: str, parent_pid: int | None, stopped: threading.Event) -> None:
+    """Report readiness after bind and stop an editor-owned gateway with Unity."""
+    ready_emitted = False
+    while not stopped.wait(_PARENT_POLL_INTERVAL_SECONDS):
+        if parent_pid is not None and not _is_process_alive(parent_pid):
+            _emit_http_event("PARENT_EXITED", {"parentPid": parent_pid})
+            server.should_exit = True
+            return
+        if not ready_emitted and server.started and not server.should_exit:
+            _emit_http_event(
+                "READY",
+                {
+                    "endpoint": f"http://127.0.0.1:{port}{path}",
+                    "mcpPath": path,
+                    "parentPid": parent_pid,
+                    "pid": os.getpid(),
+                    "port": port,
+                    "transport": "streamable-http",
+                },
+            )
+            ready_emitted = True
+
+
+def _run_http(server, port: int, path: str, log_level: str, token: str, parent_pid: int | None = None) -> None:
     import uvicorn
     from mcp.server.auth.settings import AuthSettings
 
@@ -73,7 +120,28 @@ def _run_http(server, port: int, path: str, log_level: str, token: str) -> None:
         ),
         token_verifier=StaticTokenVerifier(token),
     )
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level=log_level.lower(), workers=1)
+    uvicorn_server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=port, log_level=log_level.lower(), workers=1)
+    )
+    stopped = threading.Event()
+    monitor = threading.Thread(
+        target=_monitor_http_server,
+        kwargs={
+            "server": uvicorn_server,
+            "port": port,
+            "path": path,
+            "parent_pid": parent_pid,
+            "stopped": stopped,
+        },
+        name="unity-mcp-http-monitor",
+        daemon=True,
+    )
+    monitor.start()
+    try:
+        uvicorn_server.run()
+    finally:
+        stopped.set()
+        monitor.join(timeout=_PARENT_POLL_INTERVAL_SECONDS + 0.1)
 
 
 def _print_instances(directory: Path | None) -> int:
@@ -100,6 +168,13 @@ def run(argv: Sequence[str] | None = None) -> int:
         raise ConfigurationError("--port must be between 1 and 65535")
     if not args.mcp_path.startswith("/") or ".." in args.mcp_path:
         raise ConfigurationError("--mcp-path must be an absolute path without '..'")
+    if args.parent_pid is not None:
+        if args.transport != "streamable-http":
+            raise ConfigurationError("--parent-pid is supported only with --transport streamable-http")
+        if args.parent_pid <= 0:
+            raise ConfigurationError("--parent-pid must be a positive process ID")
+        if not _is_process_alive(args.parent_pid):
+            raise ConfigurationError(f"--parent-pid {args.parent_pid} is not running")
     http_token: str | None = None
     if args.transport == "streamable-http":
         from .http_auth import resolve_http_token
@@ -114,7 +189,7 @@ def run(argv: Sequence[str] | None = None) -> int:
         asyncio.run(_run_stdio(server))
     else:
         assert http_token is not None
-        _run_http(server, args.port, args.mcp_path, args.log_level, http_token)
+        _run_http(server, args.port, args.mcp_path, args.log_level, http_token, args.parent_pid)
     return 0
 
 

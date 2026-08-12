@@ -50,7 +50,7 @@ class UnityBridgeClient:
         self._base_headers = {
             "Authorization": f"Bearer {descriptor.token}",
             "Accept": "application/json",
-            "User-Agent": "unity-mcp-server/0.1.0",
+            "User-Agent": "unity-mcp-server/0.1.1",
             "Host": f"127.0.0.1:{descriptor.port}",
             "X-UnityMCP-Instance": descriptor.instance_id,
         }

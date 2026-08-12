@@ -247,7 +247,7 @@ def create_mcp_server(service: UnityGatewayService) -> Server[Any]:
 
     return UnityMcpServer(
         "unity-mcp",
-        version="0.1.0",
+        version="0.1.1",
         title="UnityMCP",
         description="Dynamic MCP gateway for one Unity Editor or Development Player",
         instructions=(

@@ -43,6 +43,22 @@ async def _wait_for_listener(process: asyncio.subprocess.Process, port: int, tim
     raise AssertionError(f"Streamable HTTP gateway did not listen on 127.0.0.1:{port} within {timeout}s")
 
 
+async def _wait_for_readiness(process: asyncio.subprocess.Process, timeout: float = 10.0) -> dict[str, object]:
+    assert process.stderr is not None
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if process.returncode is not None:
+            raise AssertionError(f"Streamable HTTP gateway exited with {process.returncode} before readiness")
+        remaining = deadline - asyncio.get_running_loop().time()
+        line = await asyncio.wait_for(process.stderr.readline(), timeout=max(remaining, 0.01))
+        if not line:
+            continue
+        text = line.decode(errors="replace").strip()
+        if text.startswith("UNITY_MCP_READY "):
+            return json.loads(text.removeprefix("UNITY_MCP_READY "))
+    raise AssertionError(f"Streamable HTTP gateway did not report readiness within {timeout}s")
+
+
 async def _stop_process(process: asyncio.subprocess.Process) -> None:
     if process.returncode is not None:
         return
@@ -89,12 +105,18 @@ async def test_real_streamable_http_subprocess_proxies_to_bridge(tmp_path) -> No
         str(tmp_path),
         "--http-token",
         http_token,
+        "--parent-pid",
+        str(os.getpid()),
         cwd=str(tmp_path),
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
     try:
+        readiness = await _wait_for_readiness(process)
+        assert readiness["endpoint"] == f"http://127.0.0.1:{gateway_port}/mcp"
+        assert readiness["parentPid"] == os.getpid()
+        assert readiness["transport"] == "streamable-http"
         await _wait_for_listener(process, gateway_port)
         endpoint = f"http://127.0.0.1:{gateway_port}/mcp"
         async with httpx2.AsyncClient(trust_env=False) as unauthenticated_client:
@@ -127,3 +149,60 @@ async def test_real_streamable_http_subprocess_proxies_to_bridge(tmp_path) -> No
     assert result.structured_content == {"echo": 11}
     assert initialized.capabilities.tools is not None
     assert initialized.capabilities.tools.list_changed is True
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_gateway_exits_when_watched_parent_exits(tmp_path) -> None:
+    gateway_port = _free_loopback_port()
+    http_token = "streamable-http-parent-token-" * 2
+    descriptor = {
+        "port": 65530,
+        "pid": os.getpid(),
+        "projectId": "parent-project",
+        "instanceId": "parent-instance",
+        "kind": "editor",
+        "buildId": "parent-build",
+        "token": UnityHandler.token,
+    }
+    (tmp_path / "parent-instance.json").write_text(json.dumps(descriptor), encoding="utf-8")
+    parent = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        "import time; time.sleep(60)",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    gateway = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "unity_mcp_server",
+        "--transport",
+        "streamable-http",
+        "--port",
+        str(gateway_port),
+        "--instance",
+        "parent-instance",
+        "--descriptor-dir",
+        str(tmp_path),
+        "--http-token",
+        http_token,
+        "--parent-pid",
+        str(parent.pid),
+        cwd=str(tmp_path),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        readiness = await _wait_for_readiness(gateway)
+        assert readiness["parentPid"] == parent.pid
+        parent.terminate()
+        await asyncio.wait_for(parent.wait(), timeout=5)
+        assert await asyncio.wait_for(gateway.wait(), timeout=5) == 0
+        assert gateway.stderr is not None
+        stderr = (await gateway.stderr.read()).decode(errors="replace")
+        assert "UNITY_MCP_PARENT_EXITED" in stderr
+    finally:
+        await _stop_process(gateway)
+        await _stop_process(parent)

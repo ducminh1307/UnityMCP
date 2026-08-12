@@ -1,6 +1,6 @@
 {
   "name": "com.ducminh.unity-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Unity MCP",
   "description": "Secure local MCP bridge and dynamic typed tool registry for Unity 6.",
   "unity": "6000.0",

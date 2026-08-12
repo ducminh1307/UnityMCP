@@ -10,6 +10,9 @@ the other to be the only check.
   default MCP transport.
 - Streamable HTTP additionally requires a caller-supplied bearer token; the
   gateway refuses to start that transport without one.
+- The Editor-managed HTTP mode uses a separate MCP bearer secret from the Unity
+  bridge descriptor token. The secret is generated locally per user/project and
+  must never be placed in a Unity asset, repository, issue, screenshot, or log.
 - Each Unity process creates a cryptographically random bearer token with at least
   256 bits of entropy. It lives only in a user-readable descriptor and memory.
 - Unity validates peer address, bearer token, and exact loopback Host. Requests
@@ -20,6 +23,34 @@ the other to be the only check.
 
 Loopback authentication prevents accidental cross-process access; it does not
 defend against malware already executing as the same OS user.
+
+## Editor-managed HTTP gateway secrets and lifecycle
+
+The **Window > UnityMCP > Tools** UI Toolkit panel stores its gateway executable
+path, preferred port, MCP path, and HTTP bearer secret in local per-user/per-project
+editor preferences, outside `Assets` and version control. These preferences are
+convenience storage, not a defense against another process running as the same user.
+
+The token is never supplied on the Python command line. Unity passes it through the
+`UNITY_MCP_HTTP_TOKEN` child-process environment variable, and the Python readiness
+and parent-exit events contain no token. The UI does not display the secret in a text
+field; only an explicit **Copy client config** action returns a configuration containing
+the `Authorization: Bearer <token>` header. Treat clipboard contents as sensitive and
+remove it from a client configuration before sharing diagnostics.
+
+The gateway can be stopped and its token regenerated only while stopped. Rotation
+invalidates every copied client configuration that used the old value; start again and
+copy a replacement configuration. The actual TCP port may differ from the preferred
+port when another local gateway is already using that port, so clients must use the
+endpoint returned by the copy action rather than guessing a port.
+
+Editor-managed HTTP processes receive `--parent-pid` for the exact Unity Editor that
+started them. The Python gateway validates that PID before starting and watches it
+thereafter; it exits when the parent is no longer live. Unity terminates the child it
+owns before a domain reload, starts a fresh child only after its bridge is ready again,
+and terminates it permanently on Editor quit. This lifecycle isolation prevents a
+gateway from silently surviving as an unowned endpoint, but it is not a substitute for
+the bearer token or for keeping MCP connections scoped to the intended project.
 
 ## Permissions and safety tiers
 

@@ -37,6 +37,11 @@ command in the MCP client. Streamable HTTP is optional and remains loopback-only
 unity-mcp --transport streamable-http --instance <instance-id> --port 8765 --http-token <local-secret>
 ```
 
+For an Editor-managed HTTP gateway, add `--parent-pid <unity-pid>`. The gateway
+then emits `UNITY_MCP_READY {...}` to stderr only after its loopback endpoint is
+bound, and exits when that Unity process stops. This flag is HTTP-only; stdio is
+still launched and owned by the MCP client.
+
 The v1 baseline targets 48 implemented contracts. Only the 20 explicitly
 allowlisted, built-in `safe-read` tools are enabled in a fresh project. All other
 tools require local user opt-in and planned contracts are never advertised by MCP.

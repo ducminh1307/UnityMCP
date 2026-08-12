@@ -36,6 +36,12 @@ to synthesize an absent tool. Unity's live registry remains authoritative.
 - Exact input/output schema validation, error mapping, result content, jobs,
   cancellation, timeouts, response limits, and percent-encoded IDs.
 - Real stdio subprocess and loopback Streamable HTTP sessions using MCP Inspector.
+- Editor-managed Streamable HTTP lifecycle: UI Toolkit state transitions, readiness
+  only after bind, fresh-child restart after domain reload, child shutdown on Editor
+  quit, parent-PID shutdown, and lifecycle events that never expose bearer tokens.
+- Two Editors with the same preferred port receive isolated endpoints, descriptors,
+  secrets, registries, and client configurations; one launcher never chooses the
+  other Editor's instance.
 
 ### Unity package
 
@@ -54,6 +60,8 @@ to synthesize an absent tool. Unity's live registry remains authoritative.
   out-of-scope tool, path traversal/junction escape, oversized body/schema/result,
   queue pressure, timeout, cancellation, and malicious exception/output cases.
 - Editor and Player run simultaneously with independent gateways and job spaces.
+- Copied HTTP client configuration is the only intentional secret egress from the
+  Unity UI; status, Unity Console, audit output, and readiness events redact it.
 - CI compares documented IDs/status with registered implementation metadata and
   fails on schema or catalog drift.
 
