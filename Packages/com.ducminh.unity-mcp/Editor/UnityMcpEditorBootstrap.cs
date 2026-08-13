@@ -120,6 +120,11 @@ namespace DucMinh.UnityMcp.Editor
         private Label gatewayEndpointLabel;
         private VisualElement gatewayEndpointRow;
         private HelpBox gatewayFeedbackBox;
+        private VisualElement gatewayInstallGuidePanel;
+        private Label gatewayInstallTargetLabel;
+        private Label gatewayInstallCommandsLabel;
+        private Button gatewayUseRecommendedPathButton;
+        private UnityMcpGatewayInstallGuide gatewayInstallGuide;
         private TextField executablePathField;
         private IntegerField portField;
         private TextField mcpPathField;
@@ -336,6 +341,38 @@ namespace DucMinh.UnityMcp.Editor
             gatewayFeedbackBox.AddToClassList("unity-mcp-help");
             gatewayFeedbackBox.style.display = DisplayStyle.None;
             gatewayCard.Add(gatewayFeedbackBox);
+
+            gatewayInstallGuidePanel = new VisualElement { name = "unity-mcp-gateway-install-guide" };
+            gatewayInstallGuidePanel.AddToClassList("unity-mcp-install-guide");
+            gatewayInstallGuidePanel.style.display = DisplayStyle.None;
+            gatewayInstallGuidePanel.Add(new Label("Install the local server").WithClass("unity-mcp-install-guide__title"));
+            gatewayInstallGuidePanel.Add(new Label("Git and Python 3.11 or newer are required. Run these commands in a terminal; Unity only prepares and copies them.")
+                .WithClass("unity-mcp-install-guide__description"));
+
+            var installTargetRow = new VisualElement();
+            installTargetRow.AddToClassList("unity-mcp-key-value");
+            installTargetRow.Add(new Label("Install target").WithClass("unity-mcp-key-value__key"));
+            gatewayInstallTargetLabel = new Label();
+            gatewayInstallTargetLabel.AddToClassList("unity-mcp-key-value__value");
+            gatewayInstallTargetLabel.AddToClassList("unity-mcp-code");
+            installTargetRow.Add(gatewayInstallTargetLabel);
+            gatewayInstallGuidePanel.Add(installTargetRow);
+
+            gatewayInstallCommandsLabel = new Label { name = "unity-mcp-gateway-install-commands" };
+            gatewayInstallCommandsLabel.AddToClassList("unity-mcp-install-guide__commands");
+            gatewayInstallCommandsLabel.AddToClassList("unity-mcp-code");
+            gatewayInstallGuidePanel.Add(gatewayInstallCommandsLabel);
+
+            var installActions = new VisualElement();
+            installActions.AddToClassList("unity-mcp-action-row");
+            var copyInstallCommandsButton = new Button(CopyGatewayInstallCommands) { name = "unity-mcp-gateway-copy-install", text = "Copy install commands", tooltip = "Copy the platform-specific Git and Python commands. Unity will not run them." };
+            copyInstallCommandsButton.AddToClassList("unity-mcp-primary-button");
+            gatewayUseRecommendedPathButton = new Button(UseRecommendedGatewayPath) { name = "unity-mcp-gateway-use-recommended", text = "Use recommended path", tooltip = "Use the executable path created by these install commands." };
+            gatewayUseRecommendedPathButton.AddToClassList("unity-mcp-secondary-button");
+            installActions.Add(copyInstallCommandsButton);
+            installActions.Add(gatewayUseRecommendedPathButton);
+            gatewayInstallGuidePanel.Add(installActions);
+            gatewayCard.Add(gatewayInstallGuidePanel);
 
             var advanced = new Foldout { name = "unity-mcp-gateway-advanced", text = "Advanced gateway settings", value = false };
             gatewayCard.Add(advanced);
@@ -829,6 +866,24 @@ namespace DucMinh.UnityMcp.Editor
             RefreshGatewayStatus(UnityMcpGatewayHost.GetStatus());
         }
 
+        private void CopyGatewayInstallCommands()
+        {
+            gatewayInstallGuide = UnityMcpGatewayHost.GetInstallationGuide();
+            RefreshGatewayInstallGuide(UnityMcpGatewayHost.GetStatus());
+            EditorGUIUtility.systemCopyBuffer = gatewayInstallGuide.Commands;
+            SetGatewayFeedback("Install commands copied. Run them in a terminal, then select Retry after installation.", false);
+            ShowNotification(new GUIContent("Server install commands copied."));
+        }
+
+        private void UseRecommendedGatewayPath()
+        {
+            gatewayInstallGuide = UnityMcpGatewayHost.GetInstallationGuide();
+            if (executablePathField != null) executablePathField.value = gatewayInstallGuide.ExecutablePath;
+            MarkGatewaySettingsDirty();
+            if (gatewayUseRecommendedPathButton != null) gatewayUseRecommendedPathButton.style.display = DisplayStyle.None;
+            SetGatewayFeedback("The recommended executable path is selected. It will be saved when you retry the gateway.", false);
+        }
+
         private void StopGateway()
         {
             UnityMcpGatewayHost.Stop();
@@ -876,7 +931,7 @@ namespace DucMinh.UnityMcp.Editor
         private void RefreshGatewayStatus(UnityMcpGatewayStatus status)
         {
             if (status == null) return;
-            var stateText = GatewayStateLabel(status.State);
+            var stateText = status.RequiresInstallation ? "Server not installed" : GatewayStateLabel(status.State);
             var stateColor = GatewayStateColor(status.State);
             if (headerGatewayStatusLabel != null) headerGatewayStatusLabel.text = stateText;
             if (headerGatewayStatusDot != null) headerGatewayStatusDot.style.backgroundColor = stateColor;
@@ -890,7 +945,11 @@ namespace DucMinh.UnityMcp.Editor
             if (gatewayActionButton != null)
             {
                 gatewayActionButton.style.display = isRunning ? DisplayStyle.None : DisplayStyle.Flex;
-                gatewayActionButton.text = status.State == UnityMcpGatewayState.Starting ? "Starting gateway" : status.State == UnityMcpGatewayState.Error ? "Retry gateway" : "Start gateway";
+                gatewayActionButton.text = status.State == UnityMcpGatewayState.Starting
+                    ? "Starting gateway"
+                    : status.RequiresInstallation
+                        ? "Retry after installation"
+                        : status.State == UnityMcpGatewayState.Error ? "Retry gateway" : "Start gateway";
                 gatewayActionButton.SetEnabled(status.State != UnityMcpGatewayState.Starting);
             }
             if (gatewayConfigureCodexButton != null)
@@ -909,7 +968,38 @@ namespace DucMinh.UnityMcp.Editor
                 gatewayStopButton.SetEnabled(status.IsRunning);
             }
             if (regenerateGatewayTokenButton != null) regenerateGatewayTokenButton.SetEnabled(!status.IsRunning);
-            if (status.State == UnityMcpGatewayState.Error && !string.IsNullOrWhiteSpace(status.LastError)) SetGatewayFeedback(status.LastError, true);
+            RefreshGatewayInstallGuide(status);
+            if (status.State == UnityMcpGatewayState.Error && !status.RequiresInstallation && !string.IsNullOrWhiteSpace(status.LastError)) SetGatewayFeedback(status.LastError, true);
+        }
+
+        private void RefreshGatewayInstallGuide(UnityMcpGatewayStatus status)
+        {
+            if (gatewayInstallGuidePanel == null) return;
+            var visible = status != null && status.RequiresInstallation;
+            gatewayInstallGuidePanel.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None;
+            if (!visible)
+            {
+                gatewayInstallGuide = null;
+                return;
+            }
+
+            if (gatewayInstallGuide == null) gatewayInstallGuide = UnityMcpGatewayHost.GetInstallationGuide();
+            if (gatewayInstallTargetLabel != null) gatewayInstallTargetLabel.text = gatewayInstallGuide.ExecutablePath;
+            if (gatewayInstallCommandsLabel != null) gatewayInstallCommandsLabel.text = gatewayInstallGuide.Commands;
+            if (gatewayUseRecommendedPathButton != null)
+            {
+                var configuredPath = executablePathField?.value;
+                gatewayUseRecommendedPathButton.style.display = PathsEqual(configuredPath, gatewayInstallGuide.ExecutablePath)
+                    ? DisplayStyle.None
+                    : DisplayStyle.Flex;
+            }
+        }
+
+        private static bool PathsEqual(string left, string right)
+        {
+            var normalizedLeft = (left ?? string.Empty).Trim().Replace('\\', '/').TrimEnd('/');
+            var normalizedRight = (right ?? string.Empty).Trim().Replace('\\', '/').TrimEnd('/');
+            return string.Equals(normalizedLeft, normalizedRight, StringComparison.OrdinalIgnoreCase);
         }
 
         private void SetGatewayFeedback(string value, bool isError)

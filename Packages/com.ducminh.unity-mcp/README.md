@@ -22,18 +22,24 @@ only over loopback with the generated bearer token.
 
 ### Optional Editor-managed HTTP gateway
 
-Install the Python gateway first, then open **Window > UnityMCP > Tools** and use the
-**Editor-managed HTTP gateway** panel:
+Open **Window > UnityMCP > Tools** and use the **Editor-managed HTTP gateway** panel:
 
-1. Confirm the **Gateway executable** path (the default points to the recommended
-   `UnityMCP/venv` location) or use **Browse**.
-2. Set a preferred loopback port and MCP path; `/mcp` is the normal path.
-3. Select **Start gateway**. The panel shows `Starting`, then `Running` only after the
+1. Select **Start gateway**. If the Python gateway is missing, the panel shows
+   **Server not installed** and generates commands for the current platform. The
+   commands clone the repository to local application data under `UnityMCP/source`,
+   create `UnityMCP/venv`, and install the production server package in editable mode.
+2. Select **Copy install commands**, run them in a terminal, then select
+   **Retry after installation**. Unity never runs the commands or downloads code.
+   Git and Python 3.11 or newer must already be available.
+3. If you use a custom environment, choose its executable with **Browse**. Otherwise,
+   keep the recommended `UnityMCP/venv` executable path. Preferred port and MCP path
+   remain available under **Advanced gateway settings**; `/mcp` is the normal path.
+4. The panel shows `Starting`, then `Running` only after the
    Python process has bound its endpoint.
-4. Select **Configure Codex** to create or update this project's `.codex/config.toml`.
+5. Select **Configure Codex** to create or update this project's `.codex/config.toml`.
    UnityMCP preserves unrelated settings and keeps its marked server entry synchronized
    when the actual port or token changes. Restart Codex after the first configuration.
-5. Use **Copy MCP config** only for another MCP client or manual setup. The clipboard
+6. Use **Copy MCP config** only for another MCP client or manual setup. The clipboard
    contains the Streamable HTTP URL and bearer token. Treat that copied value as a
    password: do not commit it, log it, or share it.
 

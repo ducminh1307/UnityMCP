@@ -20,18 +20,31 @@ it with `python tools/validate_catalog.py`.
 
 ## Quick start
 
-Add the local UPM package to a Unity 6 project, open **Window > UnityMCP > Tools**,
-then install the Python gateway:
+Add the UPM package to a Unity 6 project and open **Window > UnityMCP > Tools**.
+Select **Start gateway**. On a new machine, the Connection page reports **Server not
+installed** and provides platform-specific commands that you can copy and run in a
+terminal. Unity never downloads or executes the installation commands itself.
 
-```console
-python -m venv .venv
-.venv/Scripts/python -m pip install -e "server[dev]"
-unity-mcp list-instances
-unity-mcp --instance <instance-id>
+The guided installation keeps the source and virtual environment outside the Unity
+project under the platform's local application-data directory:
+
+- `UnityMCP/source`: a shallow checkout of this repository's `main` branch.
+- `UnityMCP/venv`: the Python environment containing the `unity-mcp` executable.
+
+For example, the generated Windows PowerShell commands are:
+
+```powershell
+git clone --depth 1 --branch main --single-branch 'https://github.com/ducminh1307/UnityMCP.git' "$env:LOCALAPPDATA\UnityMCP\source"
+py -3 -m venv "$env:LOCALAPPDATA\UnityMCP\venv"
+& "$env:LOCALAPPDATA\UnityMCP\venv\Scripts\python.exe" -m pip install -e "$env:LOCALAPPDATA\UnityMCP\source\server"
 ```
 
-On macOS or Linux, use `.venv/bin/python` instead. Configure the resulting stdio
-command in the MCP client. Streamable HTTP is optional and remains loopback-only:
+If `UnityMCP/source` already exists, skip the clone command. On macOS or Linux the
+Editor generates the equivalent `python3` commands using its exact local data path
+and `UnityMCP/venv/bin/python`. After installation, select **Retry after installation**.
+
+For the default stdio workflow, configure the installed `unity-mcp` command in the
+MCP client. Streamable HTTP is optional and remains loopback-only:
 
 ```console
 unity-mcp --transport streamable-http --instance <instance-id> --port 8765 --http-token <local-secret>

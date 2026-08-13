@@ -716,6 +716,48 @@
     background-color: var(--unity-colors-alternate-background);
 }
 
+.unity-mcp-install-guide {
+    margin-top: 10px;
+    margin-bottom: 10px;
+    padding-left: 10px;
+    padding-right: 10px;
+    padding-top: 10px;
+    padding-bottom: 8px;
+    border-left-width: 3px;
+    border-left-color: var(--unity-colors-focus-border);
+    background-color: var(--unity-colors-alternate-background);
+}
+
+.unity-mcp-install-guide__title {
+    margin-bottom: 3px;
+    -unity-font-style: bold;
+}
+
+.unity-mcp-install-guide__description {
+    margin-bottom: 9px;
+    font-size: 11px;
+    opacity: 0.78;
+    white-space: normal;
+}
+
+.unity-mcp-install-guide__commands {
+    margin-top: 4px;
+    margin-bottom: 4px;
+    padding-left: 8px;
+    padding-right: 8px;
+    padding-top: 7px;
+    padding-bottom: 7px;
+    border-top-width: 1px;
+    border-right-width: 1px;
+    border-bottom-width: 1px;
+    border-left-width: 1px;
+    border-top-color: var(--unity-colors-default-border);
+    border-right-color: var(--unity-colors-default-border);
+    border-bottom-color: var(--unity-colors-default-border);
+    border-left-color: var(--unity-colors-default-border);
+    white-space: normal;
+}
+
 .unity-mcp-code {
     white-space: normal;
 }

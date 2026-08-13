@@ -47,6 +47,8 @@ namespace DucMinh.UnityMcp.Editor
         public UnityMcpGatewayState State { get; internal set; }
         public string Message { get; internal set; }
         public string LastError { get; internal set; }
+        public bool RequiresInstallation { get; internal set; }
+        public string ExpectedExecutablePath { get; internal set; }
         public int Port { get; internal set; }
         public int ProcessId { get; internal set; }
         public string Endpoint { get; internal set; }
@@ -197,7 +199,7 @@ namespace DucMinh.UnityMcp.Editor
                 if (!IsValidMcpPath(settings.McpPath))
                 {
                     error = "MCP path is invalid. Save a path beginning with '/'.";
-                    SetStatusLocked(NewErrorStatus(error));
+                    SetStatusLocked(CreateErrorStatus(error));
                     changedStatus = SnapshotStatusLocked();
                 }
                 else
@@ -205,8 +207,9 @@ namespace DucMinh.UnityMcp.Editor
                     var executablePath = ResolveExecutablePath(settings.ExecutablePath);
                     if (executablePath == null)
                     {
-                        error = "Could not find unity-mcp.exe. Install the Python gateway or choose its executable path.";
-                        SetStatusLocked(NewErrorStatus(error));
+                        var installationStatus = CreateMissingExecutableStatus(settings.ExecutablePath);
+                        error = installationStatus.LastError;
+                        SetStatusLocked(installationStatus);
                         changedStatus = SnapshotStatusLocked();
                     }
                     else
@@ -215,7 +218,7 @@ namespace DucMinh.UnityMcp.Editor
                         if (descriptor == null)
                         {
                             error = "UnityMCP Editor bridge is not ready. Wait for UnityMCP to finish starting, then try again.";
-                            SetStatusLocked(NewErrorStatus(error));
+                            SetStatusLocked(CreateErrorStatus(error));
                             changedStatus = SnapshotStatusLocked();
                         }
                         else
@@ -224,7 +227,7 @@ namespace DucMinh.UnityMcp.Editor
                             if (port == 0)
                             {
                                 error = "Could not reserve a free loopback port for the UnityMCP gateway.";
-                                SetStatusLocked(NewErrorStatus(error));
+                                SetStatusLocked(CreateErrorStatus(error));
                                 changedStatus = SnapshotStatusLocked();
                             }
                             else
@@ -268,7 +271,7 @@ namespace DucMinh.UnityMcp.Editor
                                     error = "Could not start unity-mcp: " + Sanitize(exception.Message);
                                     DisposeGatewayProcessLocked();
                                     ClearPersistedGatewayLocked();
-                                    SetStatusLocked(NewErrorStatus(error));
+                                    SetStatusLocked(CreateErrorStatus(error));
                                     changedStatus = SnapshotStatusLocked();
                                 }
                             }
@@ -429,6 +432,8 @@ namespace DucMinh.UnityMcp.Editor
 #endif
         }
 
+        internal static UnityMcpGatewayInstallGuide GetInstallationGuide() => UnityMcpGatewayInstallGuide.CreateDefault();
+
         private static void Tick()
         {
             UnityMcpGatewayStatus changedStatus = null;
@@ -446,7 +451,7 @@ namespace DucMinh.UnityMcp.Editor
                     else if (DateTime.UtcNow >= restartDeadlineUtc)
                     {
                         restartAfterAssemblyReload = false;
-                        SetStatusLocked(NewErrorStatus("UnityMCP bridge did not become ready after the domain reload."));
+                        SetStatusLocked(CreateErrorStatus("UnityMCP bridge did not become ready after the domain reload."));
                         changedStatus = SnapshotStatusLocked();
                     }
                 }
@@ -480,7 +485,7 @@ namespace DucMinh.UnityMcp.Editor
                     : BuildExitedMessage(exitCode);
                 DisposeGatewayProcessLocked();
                 ClearPersistedGatewayLocked();
-                SetStatusLocked(expectedStop ? NewStoppedStatus(message) : NewErrorStatus(message));
+                SetStatusLocked(expectedStop ? NewStoppedStatus(message) : CreateErrorStatus(message));
                 expectedStop = false;
                 processExited = false;
                 return true;
@@ -497,7 +502,7 @@ namespace DucMinh.UnityMcp.Editor
                 expectedStop = true;
                 StopGatewayProcessLocked();
                 ClearPersistedGatewayLocked();
-                SetStatusLocked(NewErrorStatus("unity-mcp did not report readiness within 15 seconds."));
+                SetStatusLocked(CreateErrorStatus("unity-mcp did not report readiness within 15 seconds."));
                 return true;
             }
             return false;
@@ -586,13 +591,18 @@ namespace DucMinh.UnityMcp.Editor
 
         private static string ResolveExecutablePath(string configuredPath)
         {
+            var fullPath = GetExpectedExecutablePath(configuredPath);
+            return !string.IsNullOrEmpty(fullPath) && File.Exists(fullPath) ? fullPath : null;
+        }
+
+        private static string GetExpectedExecutablePath(string configuredPath)
+        {
             if (string.IsNullOrWhiteSpace(configuredPath)) configuredPath = GetDefaultExecutablePath();
             try
             {
-                var fullPath = Path.GetFullPath(configuredPath.Trim());
-                return File.Exists(fullPath) ? fullPath : null;
+                return Path.GetFullPath(configuredPath.Trim());
             }
-            catch { return null; }
+            catch { return configuredPath.Trim(); }
         }
 
         private static void OnGatewayProcessExited(object sender, EventArgs args)
@@ -721,6 +731,8 @@ namespace DucMinh.UnityMcp.Editor
                 State = status.State,
                 Message = status.Message,
                 LastError = status.LastError,
+                RequiresInstallation = status.RequiresInstallation,
+                ExpectedExecutablePath = status.ExpectedExecutablePath,
                 Port = status.Port,
                 ProcessId = status.ProcessId,
                 Endpoint = status.Endpoint,
@@ -734,12 +746,27 @@ namespace DucMinh.UnityMcp.Editor
             Message = message
         };
 
-        private static UnityMcpGatewayStatus NewErrorStatus(string message) => new UnityMcpGatewayStatus
+        internal static UnityMcpGatewayStatus CreateErrorStatus(string message) => new UnityMcpGatewayStatus
         {
             State = UnityMcpGatewayState.Error,
             Message = message,
             LastError = message
         };
+
+        internal static UnityMcpGatewayStatus CreateMissingExecutableStatus(string configuredPath)
+        {
+            var expectedExecutablePath = GetExpectedExecutablePath(configuredPath);
+            var message = "UnityMCP server is not installed. Expected the gateway executable at '"
+                + expectedExecutablePath + "'.";
+            return new UnityMcpGatewayStatus
+            {
+                State = UnityMcpGatewayState.Error,
+                Message = message,
+                LastError = message,
+                RequiresInstallation = true,
+                ExpectedExecutablePath = expectedExecutablePath
+            };
+        }
 
         private static void RaiseStatusChanged(UnityMcpGatewayStatus changedStatus)
         {
