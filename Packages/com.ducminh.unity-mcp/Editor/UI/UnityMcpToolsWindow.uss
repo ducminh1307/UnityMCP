@@ -339,15 +339,29 @@
 }
 
 .unity-mcp-tool-toolbar__filter {
-    width: 146px;
-    min-width: 112px;
+    width: 190px;
+    min-width: 190px;
+    flex-shrink: 0;
     margin-right: 8px;
     margin-bottom: 4px;
+}
+
+.unity-mcp-tool-toolbar__filter > .unity-base-field__label {
+    width: 48px;
+    min-width: 48px;
+    flex-basis: 48px;
+    margin-right: 4px;
+}
+
+.unity-mcp-tool-toolbar__filter > .unity-base-field__input {
+    min-width: 0;
+    flex-grow: 1;
 }
 
 .unity-mcp-tool-toolbar__actions {
     flex-direction: row;
     align-items: center;
+    flex-shrink: 0;
     margin-bottom: 4px;
 }
 
