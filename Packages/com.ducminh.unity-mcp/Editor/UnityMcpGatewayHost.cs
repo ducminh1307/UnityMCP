@@ -364,15 +364,40 @@ namespace DucMinh.UnityMcp.Editor
         {
             var connection = GetConnectionInfo();
             if (connection == null || GetStatus().State != UnityMcpGatewayState.Running) return null;
-            var serverName = "unity_" + ToConfigIdentifier(Path.GetFileName(GetProjectRoot())) + "_" + ProjectKey.Substring(0, 6);
+            var serverName = GetCodexServerName();
             return "# ChatGPT Desktop / Codex app\n"
                 + "# Type: Streamable HTTP\n"
                 + "# URL: " + connection.Endpoint + "\n"
                 + "# Bearer token: " + connection.BearerToken + "\n\n"
-                + "# Or paste into ~/.codex/config.toml\n"
+                + "# Or paste into .codex/config.toml for this project\n"
                 + "[mcp_servers." + serverName + "]\n"
                 + "url = \"" + connection.Endpoint + "\"\n"
                 + "http_headers = { Authorization = \"Bearer " + connection.BearerToken + "\" }\n";
+        }
+
+        /// <summary>
+        /// Writes this running gateway to the trusted project's .codex/config.toml. The generated
+        /// section is marked as UnityMCP-managed so later gateway restarts can refresh its port or
+        /// token automatically. Existing unrelated Codex settings are preserved.
+        /// </summary>
+        public static bool TryConfigureCodexForProject(out string configPath, out string error)
+        {
+            configPath = null;
+            error = null;
+            var connection = GetConnectionInfo();
+            if (connection == null)
+            {
+                error = "Start the UnityMCP gateway before configuring Codex for this project.";
+                return false;
+            }
+
+            return UnityMcpCodexProjectConfig.TryWrite(
+                GetProjectRootPath(),
+                GetCodexServerName(),
+                connection.Endpoint,
+                connection.BearerToken,
+                out configPath,
+                out error);
         }
 
         /// <summary>Creates a new local bearer token. Stop the running gateway first.</summary>
@@ -426,8 +451,19 @@ namespace DucMinh.UnityMcp.Editor
                     }
                 }
             }
+            if (changedStatus != null && changedStatus.State == UnityMcpGatewayState.Running)
+                RefreshManagedCodexProjectConfiguration();
             if (changedStatus != null) RaiseStatusChanged(changedStatus);
             if (startAfterReload) Start(out _);
+        }
+
+        private static void RefreshManagedCodexProjectConfiguration()
+        {
+            var projectRoot = GetProjectRootPath();
+            var serverName = GetCodexServerName();
+            if (!UnityMcpCodexProjectConfig.IsManaged(projectRoot, serverName)) return;
+            if (!TryConfigureCodexForProject(out _, out var error) && !string.IsNullOrWhiteSpace(error))
+                UnityEngine.Debug.LogWarning("UnityMCP could not refresh the local Codex project config: " + Sanitize(error));
         }
 
         private static bool RefreshProcessStateLocked()
@@ -472,7 +508,7 @@ namespace DucMinh.UnityMcp.Editor
             var startInfo = new ProcessStartInfo
             {
                 FileName = executablePath,
-                WorkingDirectory = GetProjectRoot(),
+                WorkingDirectory = GetProjectRootPath(),
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
@@ -756,9 +792,14 @@ namespace DucMinh.UnityMcp.Editor
             if (string.IsNullOrWhiteSpace(value)) return "project";
             var builder = new StringBuilder(value.Length);
             foreach (var character in value.ToLowerInvariant())
-                builder.Append(char.IsLetterOrDigit(character) ? character : '_');
+                builder.Append(character >= 'a' && character <= 'z' || character >= '0' && character <= '9' ? character : '_');
             var result = builder.ToString().Trim('_');
             return string.IsNullOrEmpty(result) ? "project" : result;
+        }
+
+        private static string GetCodexServerName()
+        {
+            return "unity_" + ToConfigIdentifier(Path.GetFileName(GetProjectRootPath())) + "_" + ProjectKey.Substring(0, 6);
         }
 
         // Fresh projects choose different stable defaults so two Editors are unlikely to contend
@@ -781,10 +822,14 @@ namespace DucMinh.UnityMcp.Editor
 
         private static string GetProjectRoot()
         {
+            return GetProjectRootPath().ToLowerInvariant();
+        }
+
+        private static string GetProjectRootPath()
+        {
             return Path.GetFullPath(Path.Combine(Application.dataPath, ".."))
                 .Replace('\\', '/')
-                .TrimEnd('/')
-                .ToLowerInvariant();
+                .TrimEnd('/');
         }
 
         private static string Hash(string value)

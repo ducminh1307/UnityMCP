@@ -42,6 +42,11 @@ then emits `UNITY_MCP_READY {...}` to stderr only after its loopback endpoint is
 bound, and exits when that Unity process stops. This flag is HTTP-only; stdio is
 still launched and owned by the MCP client.
 
+When that gateway is running, **Configure Codex** creates or updates the trusted
+Unity project's `.codex/config.toml`. UnityMCP preserves unrelated Codex settings,
+locally excludes the token-bearing file from Git, and keeps its marked MCP entry
+synchronized when the gateway port or token changes.
+
 The catalog is source-validated: only contracts with a compiled Unity handler are
 marked implemented. The 20 explicitly allowlisted, built-in `safe-read` tools are
 enabled in a fresh project. All other tools require local user opt-in, and planned

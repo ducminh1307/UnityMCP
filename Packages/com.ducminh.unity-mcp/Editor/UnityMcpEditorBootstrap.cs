@@ -110,6 +110,8 @@ namespace DucMinh.UnityMcp.Editor
         private VisualElement headerGatewayStatusDot;
         private Label headerToolSummaryLabel;
         private Button gatewayActionButton;
+        private Button gatewayConfigureCodexButton;
+        private Button gatewayCopyConfigButton;
         private Button gatewayStopButton;
 
         private Label gatewayStatusTitleLabel;
@@ -239,9 +241,15 @@ namespace DucMinh.UnityMcp.Editor
 
             gatewayActionButton = new Button(HandleGatewayPrimaryAction) { name = "unity-mcp-gateway-primary", text = "Start gateway", tooltip = "Start this Editor's Streamable HTTP gateway." };
             gatewayActionButton.AddToClassList("unity-mcp-primary-button");
+            gatewayConfigureCodexButton = new Button(ConfigureCodexForProject) { name = "unity-mcp-gateway-configure-codex", text = "Configure Codex", tooltip = "Create or update this project's .codex/config.toml and keep it synchronized with the gateway." };
+            gatewayConfigureCodexButton.AddToClassList("unity-mcp-primary-button");
+            gatewayCopyConfigButton = new Button(CopyGatewayClientConfiguration) { name = "unity-mcp-gateway-copy-config", text = "Copy MCP config", tooltip = "Copy connection details for another MCP client." };
+            gatewayCopyConfigButton.AddToClassList("unity-mcp-secondary-button");
             gatewayStopButton = new Button(StopGateway) { name = "unity-mcp-gateway-stop", text = "Stop", tooltip = "Stop only the gateway owned by this Editor." };
             gatewayStopButton.AddToClassList("unity-mcp-secondary-button");
             actions.Add(gatewayActionButton);
+            actions.Add(gatewayConfigureCodexButton);
+            actions.Add(gatewayCopyConfigButton);
             actions.Add(gatewayStopButton);
         }
 
@@ -278,7 +286,7 @@ namespace DucMinh.UnityMcp.Editor
         {
             page.contentContainer.AddToClassList("unity-mcp-stack");
             page.contentContainer.Add(CreateHelp(
-                "Start the gateway, copy its connection configuration, then add it to your MCP client. Advanced settings are kept out of the main flow.",
+                "Start the gateway, then configure Codex for this project with one click or copy the connection for another MCP client.",
                 "How it works"));
 
             var gatewayCard = CreateCard("Local MCP gateway", "This is an optional Streamable HTTP connection for this exact Unity Editor instance.");
@@ -353,7 +361,7 @@ namespace DucMinh.UnityMcp.Editor
 
             var security = new Foldout { name = "unity-mcp-gateway-security", text = "Security", value = false };
             gatewayCard.Add(security);
-            AddMutedLabel(security, "The bearer token stays in local editor preferences and is only copied when you choose Copy MCP config.", 7);
+            AddMutedLabel(security, "Configure Codex writes the bearer token to this project's ignored .codex/config.toml. Copy MCP config places it on the clipboard.", 7);
             regenerateGatewayTokenButton = new Button(RegenerateGatewayToken) { name = "unity-mcp-gateway-regenerate-token", text = "Regenerate token", tooltip = "Creates a new local token after the gateway is stopped." };
             regenerateGatewayTokenButton.AddToClassList("unity-mcp-danger-button");
             security.Add(regenerateGatewayTokenButton);
@@ -723,6 +731,17 @@ namespace DucMinh.UnityMcp.Editor
             ShowNotification(new GUIContent("MCP configuration copied."));
         }
 
+        private void ConfigureCodexForProject()
+        {
+            if (!UnityMcpGatewayHost.TryConfigureCodexForProject(out _, out var error))
+            {
+                SetGatewayFeedback(error, true);
+                return;
+            }
+            SetGatewayFeedback("Codex project config updated at .codex/config.toml. UnityMCP will keep this managed server entry synchronized; restart Codex to load it.", false);
+            ShowNotification(new GUIContent("Codex configured for this project."));
+        }
+
         private void RegenerateGatewayToken()
         {
             if (!EditorUtility.DisplayDialog("Regenerate UnityMCP token", "Existing copied client configurations will stop working. Regenerate the local token?", "Regenerate", "Cancel")) return;
@@ -752,8 +771,19 @@ namespace DucMinh.UnityMcp.Editor
             if (gatewayEndpointLabel != null) gatewayEndpointLabel.text = status.Endpoint ?? string.Empty;
             if (gatewayActionButton != null)
             {
-                gatewayActionButton.text = isRunning ? "Copy MCP config" : status.State == UnityMcpGatewayState.Starting ? "Starting gateway" : status.State == UnityMcpGatewayState.Error ? "Retry gateway" : "Start gateway";
+                gatewayActionButton.style.display = isRunning ? DisplayStyle.None : DisplayStyle.Flex;
+                gatewayActionButton.text = status.State == UnityMcpGatewayState.Starting ? "Starting gateway" : status.State == UnityMcpGatewayState.Error ? "Retry gateway" : "Start gateway";
                 gatewayActionButton.SetEnabled(status.State != UnityMcpGatewayState.Starting);
+            }
+            if (gatewayConfigureCodexButton != null)
+            {
+                gatewayConfigureCodexButton.style.display = isRunning ? DisplayStyle.Flex : DisplayStyle.None;
+                gatewayConfigureCodexButton.SetEnabled(isRunning);
+            }
+            if (gatewayCopyConfigButton != null)
+            {
+                gatewayCopyConfigButton.style.display = isRunning ? DisplayStyle.Flex : DisplayStyle.None;
+                gatewayCopyConfigButton.SetEnabled(isRunning);
             }
             if (gatewayStopButton != null)
             {

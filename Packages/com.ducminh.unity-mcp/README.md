@@ -30,14 +30,23 @@ Install the Python gateway first, then open **Window > UnityMCP > Tools** and us
 2. Set a preferred loopback port and MCP path; `/mcp` is the normal path.
 3. Select **Start gateway**. The panel shows `Starting`, then `Running` only after the
    Python process has bound its endpoint.
-4. Select **Copy client config**. The clipboard contains the Streamable HTTP URL and
-   bearer token for the ChatGPT desktop UI, plus a ready-to-paste `config.toml` fragment
-   for Codex. Treat that copied value as a password: do not commit it, log it, or share it.
+4. Select **Configure Codex** to create or update this project's `.codex/config.toml`.
+   UnityMCP preserves unrelated settings and keeps its marked server entry synchronized
+   when the actual port or token changes. Restart Codex after the first configuration.
+5. Use **Copy MCP config** only for another MCP client or manual setup. The clipboard
+   contains the Streamable HTTP URL and bearer token. Treat that copied value as a
+   password: do not commit it, log it, or share it.
+
+The project-scoped Codex configuration is supported for trusted projects. Because its
+static `Authorization` header contains the local bearer token, UnityMCP adds the exact
+`.codex/config.toml` path to the repository's local `.git/info/exclude` when the project
+is inside Git. This does not modify the shared `.gitignore`. Do not force-add the file.
+UnityMCP refuses to inject a bearer token if that config file is already tracked.
 
 The gateway launches only for this exact Editor descriptor and passes an explicit
 `--instance` value; it never silently selects another open Unity project. It binds only
 to `127.0.0.1`. The preferred port is not a promise: if it is occupied, Unity selects a
-different free loopback port and **Copy client config** includes the actual endpoint.
+different free loopback port and the managed Codex entry uses the actual endpoint.
 
 Each open project has its own local settings, bearer secret, Python child process, tool
 registry, and MCP endpoint. Configure a separate MCP connection for each project. Do
@@ -45,8 +54,9 @@ not reuse Project A's copied URL/token for Project B.
 
 The token is local per user/project and is kept outside `Assets` and source control. It
 is passed to the child process through `UNITY_MCP_HTTP_TOKEN`, not the command line.
-The UI does not render it; it is included only by the explicit copy action. Select
-**Stop gateway** before **Regenerate token**, then copy a new client configuration.
+The UI does not render it; it is written or copied only by an explicit configuration
+action. Select **Stop gateway** before **Regenerate token**, then start the gateway; an
+existing UnityMCP-managed Codex entry is refreshed automatically.
 
 Unity starts the HTTP gateway with its own process ID as `--parent-pid`. The Python
 gateway watches that parent and exits when the Editor exits. Before a domain reload,
