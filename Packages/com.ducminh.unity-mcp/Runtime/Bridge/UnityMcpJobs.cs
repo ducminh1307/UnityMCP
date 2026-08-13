@@ -14,6 +14,12 @@ namespace DucMinh.UnityMcp
         public UnityMcpResult result;
         public string error;
         internal CancellationTokenSource cancellation;
+
+        /// <summary>
+        /// Allows an Editor-side job operation to observe cancellation without exposing the
+        /// mutable cancellation source across the Runtime/Editor assembly boundary.
+        /// </summary>
+        public bool IsCancellationRequested => cancellation != null && cancellation.IsCancellationRequested;
     }
 
     public sealed class UnityMcpJobStore

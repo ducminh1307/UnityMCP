@@ -1,30 +1,34 @@
 # Roadmap and acceptance gates
 
 The canonical inventory is [tool-catalog.json](tool-catalog.json). Its 187 unique
-IDs are grouped into 20 categories whose declared counts sum to 187. The first
-implementation baseline is exactly 48 contracts, of which 20 built-in safe-read
-tools are default-enabled. `python tools/validate_catalog.py` locks those sets and
-fails on count drift, duplicates, invalid metadata, or accidental enablement.
+IDs are grouped into 20 categories whose declared counts sum to 187. The catalog's
+implemented set is derived from the compiled C# registrations; 20 built-in
+safe-read tools are default-enabled. `python tools/validate_catalog.py` locks the
+catalog to the source-derived set and fails on count drift, duplicates, invalid
+metadata, or accidental enablement.
 
 `implemented` in the catalog is a v1 delivery target, not permission for Python
 to synthesize an absent tool. Unity's live registry remains authoritative.
 
 ## Delivery waves
 
-1. **Foundation and core 48:** descriptor discovery, stdio and loopback
+1. **Foundation and safe core:** descriptor discovery, stdio and loopback
    Streamable HTTP, authenticated Unity bridge, immutable registry snapshots,
    JSON-Schema validation, 20 safe reads, 20 opt-in mutations, custom scaffold
    and validation, common jobs, four runtime-oriented contracts, permission UI,
    and runtime manifest generation.
-2. **Authoring workflows:** tests/build, remaining prefab and material tools,
-   screenshots, UI, animation/timeline, audio, and input.
-3. **Diagnostics:** profiler, memory, frame debugging, visual QA, and complexity
-   analysis with strict output and lifetime bounds.
+2. **Authoring workflows:** tests/build, prefab and material tools, screenshots,
+   UI, animation/timeline, audio, input, and bounded automation.
+3. **Diagnostics:** profiler, frame debugging, visual QA, complexity analysis, and
+   memory summaries with strict output bounds. Memory snapshot capture/comparison
+   stays planned until a pinned Memory Profiler adapter and lifecycle tests exist.
 4. **Optional package packs:** Addressables, Localization, Terrain/2D, Cinemachine,
    Navigation, Visual Effect Graph, ProBuilder, and other dependency-gated tools.
-5. **Unsafe capabilities:** reflection invocation, C# execution, package/build
-   mutation, input simulation, and broad automation only after explicit threat
-   review and granular policy controls.
+   A missing package removes its contracts from the live registry.
+5. **Unsafe capabilities:** reflection invocation, allowlisted automation,
+   package/build mutation, input simulation, and explicit developer-reviewed C# command
+   dispatch only after threat review and granular policy controls. UnityMCP never compiles
+   or evaluates caller-supplied C# source.
 
 ## Test matrix
 
@@ -75,5 +79,5 @@ to synthesize an absent tool. Unity's live registry remains authoritative.
   require a rebuild and production Players expose no bridge.
 - Both MCP transports work without Node.js; all listeners are loopback-only and
   telemetry remains disabled.
-- Catalog validation reports 187 tools, 48 implemented targets, and 20
-  default-enabled tools; implementation/schema drift fails CI.
+- Catalog validation reports 187 tools, the exact source-derived implemented set,
+  and 20 default-enabled tools; implementation/schema drift fails CI.

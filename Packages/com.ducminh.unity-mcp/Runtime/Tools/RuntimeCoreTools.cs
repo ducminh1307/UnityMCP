@@ -299,9 +299,9 @@ namespace DucMinh.UnityMcp
             finally { UnityEngine.Object.Destroy(texture); }
         }
 
-        private static ChangeOutput Change(UnityMcpContext context, string summary, int? instanceId = null) => new ChangeOutput { dryRun = context.DryRun, changed = !context.DryRun, summary = summary, instanceId = instanceId };
+        internal static ChangeOutput Change(UnityMcpContext context, string summary, int? instanceId = null) => new ChangeOutput { dryRun = context.DryRun, changed = !context.DryRun, summary = summary, instanceId = instanceId };
 
-        private static Scene FindScene(string selector)
+        internal static Scene FindScene(string selector)
         {
             if (string.IsNullOrEmpty(selector)) return SceneManager.GetActiveScene();
             for (var index = 0; index < SceneManager.sceneCount; index++)
@@ -312,23 +312,23 @@ namespace DucMinh.UnityMcp
             return default;
         }
 
-        private static bool SceneMatches(Scene scene, string selector) => string.Equals(scene.name, selector, StringComparison.OrdinalIgnoreCase) || string.Equals(scene.path, selector, StringComparison.OrdinalIgnoreCase);
+        internal static bool SceneMatches(Scene scene, string selector) => string.Equals(scene.name, selector, StringComparison.OrdinalIgnoreCase) || string.Equals(scene.path, selector, StringComparison.OrdinalIgnoreCase);
 
-        private static IEnumerable<GameObject> AllSceneObjects()
+        internal static IEnumerable<GameObject> AllSceneObjects()
         {
             for (var sceneIndex = 0; sceneIndex < SceneManager.sceneCount; sceneIndex++)
                 foreach (var root in SceneManager.GetSceneAt(sceneIndex).GetRootGameObjects())
                     foreach (var item in Traverse(root)) yield return item;
         }
 
-        private static IEnumerable<GameObject> Traverse(GameObject root)
+        internal static IEnumerable<GameObject> Traverse(GameObject root)
         {
             yield return root;
             for (var index = 0; index < root.transform.childCount; index++)
                 foreach (var child in Traverse(root.transform.GetChild(index).gameObject)) yield return child;
         }
 
-        private static GameObject RequireGameObject(int? instanceId, string path)
+        internal static GameObject RequireGameObject(int? instanceId, string path)
         {
             GameObject result = null;
             if (instanceId.HasValue)
@@ -339,7 +339,7 @@ namespace DucMinh.UnityMcp
             return result;
         }
 
-        private static Type RequireComponentType(string typeName)
+        internal static Type RequireComponentType(string typeName)
         {
             if (string.IsNullOrWhiteSpace(typeName)) throw new ArgumentException("type is required.");
             var matches = AllTypes().Where(t => typeof(Component).IsAssignableFrom(t) && (t.FullName == typeName || t.Name == typeName)).Distinct().ToArray();
@@ -348,7 +348,7 @@ namespace DucMinh.UnityMcp
             return matches[0];
         }
 
-        private static Component[] RequireComponents(GameObject gameObject, string typeName)
+        internal static Component[] RequireComponents(GameObject gameObject, string typeName)
         {
             var type = RequireComponentType(typeName);
             var values = gameObject.GetComponents(type);
@@ -356,7 +356,7 @@ namespace DucMinh.UnityMcp
             return values;
         }
 
-        private static IEnumerable<Type> AllTypes()
+        internal static IEnumerable<Type> AllTypes()
         {
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -368,20 +368,20 @@ namespace DucMinh.UnityMcp
             }
         }
 
-        private static string HierarchyPath(GameObject gameObject)
+        internal static string HierarchyPath(GameObject gameObject)
         {
             var names = new Stack<string>();
             for (var current = gameObject.transform; current != null; current = current.parent) names.Push(current.name);
             return gameObject.scene.name + ":/" + string.Join("/", names.ToArray());
         }
 
-        private static GameObjectSummary Summary(GameObject gameObject) => new GameObjectSummary
+        internal static GameObjectSummary Summary(GameObject gameObject) => new GameObjectSummary
         {
             instanceId = gameObject.GetInstanceID(), name = gameObject.name, path = HierarchyPath(gameObject), scene = gameObject.scene.name,
             activeSelf = gameObject.activeSelf, activeInHierarchy = gameObject.activeInHierarchy
         };
 
-        private static GameObjectInfo Info(GameObject gameObject) => new GameObjectInfo
+        internal static GameObjectInfo Info(GameObject gameObject) => new GameObjectInfo
         {
             instanceId = gameObject.GetInstanceID(), name = gameObject.name, path = HierarchyPath(gameObject), scene = gameObject.scene.name,
             activeSelf = gameObject.activeSelf, activeInHierarchy = gameObject.activeInHierarchy, tag = gameObject.tag, layer = gameObject.layer,
@@ -390,7 +390,7 @@ namespace DucMinh.UnityMcp
             componentTypes = gameObject.GetComponents<Component>().Where(c => c != null).Select(c => c.GetType().FullName).ToList()
         };
 
-        private static GameObjectNode ToNode(GameObject gameObject, int depth, int maxDepth, bool includeInactive)
+        internal static GameObjectNode ToNode(GameObject gameObject, int depth, int maxDepth, bool includeInactive)
         {
             var node = new GameObjectNode
             {

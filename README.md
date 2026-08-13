@@ -42,9 +42,10 @@ then emits `UNITY_MCP_READY {...}` to stderr only after its loopback endpoint is
 bound, and exits when that Unity process stops. This flag is HTTP-only; stdio is
 still launched and owned by the MCP client.
 
-The v1 baseline targets 48 implemented contracts. Only the 20 explicitly
-allowlisted, built-in `safe-read` tools are enabled in a fresh project. All other
-tools require local user opt-in and planned contracts are never advertised by MCP.
+The catalog is source-validated: only contracts with a compiled Unity handler are
+marked implemented. The 20 explicitly allowlisted, built-in `safe-read` tools are
+enabled in a fresh project. All other tools require local user opt-in, and planned
+contracts are never advertised by MCP.
 
 ## Requirements
 
@@ -55,7 +56,8 @@ tools require local user opt-in and planned contracts are never advertised by MC
 
 Node.js is not required. Telemetry and remote network access are disabled by design.
 
-The repository CI validates that documentation and C# registrations agree on the
-exact 187/48 contracts, then lints, compiles, and tests the Python gateway. Unity
+The repository CI validates that the 187-tool catalog and C# registrations agree
+on the exact source-derived implementation set, then lints, compiles, and tests
+the Python gateway. Unity
 EditMode and desktop Development Player checks are intended for a licensed Unity CI
 runner.

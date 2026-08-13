@@ -1,7 +1,7 @@
 {
   "name": "DucMinh.UnityMcp.Editor",
   "rootNamespace": "DucMinh.UnityMcp.Editor",
-  "references": ["DucMinh.UnityMcp.Runtime", "Unity.Newtonsoft.Json"],
+  "references": ["DucMinh.UnityMcp.Runtime", "Unity.Newtonsoft.Json", "UnityEditor.TestRunner"],
   "includePlatforms": ["Editor"],
   "excludePlatforms": [],
   "allowUnsafeCode": false,

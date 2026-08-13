@@ -53,38 +53,6 @@ DEFAULT_ENABLED = {
     "package-list",
 }
 
-CORE_IMPLEMENTED = DEFAULT_ENABLED | {
-    "editor-play",
-    "editor-stop",
-    "editor-selection-set",
-    "editor-refresh",
-    "scene-create",
-    "scene-open",
-    "scene-save",
-    "gameobject-create",
-    "gameobject-delete",
-    "gameobject-set-parent",
-    "gameobject-set-transform",
-    "gameobject-set-properties",
-    "component-add",
-    "component-remove",
-    "component-set-property",
-    "asset-create-folder",
-    "asset-move",
-    "asset-delete",
-    "prefab-instantiate",
-    "material-set-property",
-    "custom-tool-scaffold",
-    "custom-tool-validate",
-    "job-get",
-    "job-cancel",
-    "runtime-state-get",
-    "runtime-time-scale-get",
-    "runtime-time-scale-set",
-    "screenshot-game-view",
-}
-
-
 def require(condition: bool, message: str, errors: list[str]) -> None:
     if not condition:
         errors.append(message)
@@ -206,7 +174,9 @@ def validate(catalog: dict[str, Any]) -> list[str]:
             f"tool count {len(tools)} does not match expectedToolCount {expected_count}", errors)
     require(sum(declared_counts.values()) == expected_count,
             "sum of declared category counts must match expectedToolCount", errors)
-    require(implemented_count == 48, "implementedTargetCount must be 48", errors)
+    require(isinstance(implemented_count, int) and not isinstance(implemented_count, bool)
+            and implemented_count >= len(DEFAULT_ENABLED),
+            "implementedTargetCount must be an integer no smaller than the safe default profile", errors)
     require(len(implemented) == implemented_count,
             f"implemented count {len(implemented)} does not match {implemented_count}", errors)
 
@@ -219,12 +189,6 @@ def validate(catalog: dict[str, Any]) -> list[str]:
             "default-enabled set differs from the 20-tool safe allowlist; "
             f"missing={sorted(DEFAULT_ENABLED - enabled)}, extra={sorted(enabled - DEFAULT_ENABLED)}",
             errors)
-    require(implemented == CORE_IMPLEMENTED,
-            "implemented set differs from the 48-tool v1 baseline; "
-            f"missing={sorted(CORE_IMPLEMENTED - implemented)}, "
-            f"extra={sorted(implemented - CORE_IMPLEMENTED)}",
-            errors)
-
     source_pattern = re.compile(r'\[UnityMcpTool\("([a-z0-9-]+)"')
     source_names: list[str] = []
     for source in sorted(PACKAGE_ROOT.glob("**/*.cs")):
@@ -235,10 +199,10 @@ def validate(catalog: dict[str, Any]) -> list[str]:
     source_duplicates = sorted(name for name, count in Counter(source_names).items() if count > 1)
     require(not source_duplicates,
             f"duplicate built-in UnityMcpTool attributes: {', '.join(source_duplicates)}", errors)
-    require(source_set == CORE_IMPLEMENTED,
-            "C# built-in attributes differ from the 48-tool catalog baseline; "
-            f"missing={sorted(CORE_IMPLEMENTED - source_set)}, "
-            f"extra={sorted(source_set - CORE_IMPLEMENTED)}", errors)
+    require(source_set == implemented,
+            "C# built-in attributes differ from the implemented catalog set; "
+            f"missing={sorted(implemented - source_set)}, "
+            f"extra={sorted(source_set - implemented)}", errors)
     return errors
 
 

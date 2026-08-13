@@ -71,6 +71,13 @@ Reflection, code execution, package/build mutation, and input simulation remain
 unsafe even when arguments appear read-only. Package-dependent tools are absent
 or invalid when their exact package dependency is unavailable.
 
+`execute-csharp` is not an evaluator or compiler. It can invoke only one exact
+public static project method named in a developer-created local
+`UnityMcpCSharpCommandAllowlist` asset; the caller cannot supply C# source, a type,
+or a method name. The reviewed project method remains the trust boundary, so the
+tool is still `unsafe`, disabled by default, and does not invoke project code during
+dry-run validation.
+
 ## Mutation controls
 
 - Mutation contracts preview by default and require explicit `apply: true` where

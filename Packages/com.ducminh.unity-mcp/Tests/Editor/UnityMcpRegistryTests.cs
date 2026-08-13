@@ -44,6 +44,12 @@ namespace DucMinh.UnityMcp.Tests
         [UnityMcpTool("project-test-opaque", Scope = UnityMcpScope.Editor, MainThread = false)]
         public static object InvalidOpaque(object input) => input;
 
+        [UnityMcpTool("project-test-missing-package", Scope = UnityMcpScope.Editor, RequiredType = "DucMinh.UnityMcp.Tests.TypeThatDoesNotExist", MainThread = false)]
+        public static string MissingPackage(EmptyInput input) => "unreachable";
+
+        [UnityMcpTool("project-test-available-package", Scope = UnityMcpScope.Editor, RequiredType = "UnityEngine.GameObject", MainThread = false)]
+        public static string AvailablePackage(EmptyInput input) => "available";
+
         [UnityMcpTool("project-test-unity-values", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead, MainThread = false)]
         public static ValueOutput EchoUnityValues(ValueInput input) => new ValueOutput
         {
@@ -102,7 +108,27 @@ namespace DucMinh.UnityMcp.Tests
         }
 
         [Test]
-        public void CoreCatalog_HasExactly48UniqueToolIds()
+        public void RequiredTypeThatIsUnavailable_IsNotRegistered()
+        {
+            var method = GetType().GetMethod(nameof(MissingPackage), BindingFlags.Static | BindingFlags.Public);
+            UnityMcpRegistry.DiscoveryOverride = () => new[] { method };
+            var registry = new UnityMcpRegistry(UnityMcpScope.Editor);
+            registry.Reload();
+            Assert.That(registry.Tools, Is.Empty);
+        }
+
+        [Test]
+        public void RequiredTypeThatIsAvailable_IsRegistered()
+        {
+            var method = GetType().GetMethod(nameof(AvailablePackage), BindingFlags.Static | BindingFlags.Public);
+            UnityMcpRegistry.DiscoveryOverride = () => new[] { method };
+            var registry = new UnityMcpRegistry(UnityMcpScope.Editor);
+            registry.Reload();
+            Assert.That(registry.Tools.Select(tool => tool.name), Is.EqualTo(new[] { "project-test-available-package" }));
+        }
+
+        [Test]
+        public void BuiltInCatalog_HasUniqueToolIds()
         {
             var methods = AppDomain.CurrentDomain.GetAssemblies().SelectMany(SafeTypes)
                 .SelectMany(t => t.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
@@ -110,8 +136,8 @@ namespace DucMinh.UnityMcp.Tests
                 .Where(m => m.DeclaringType?.Assembly.GetName().Name == "DucMinh.UnityMcp.Runtime" || m.DeclaringType?.Assembly.GetName().Name == "DucMinh.UnityMcp.Editor")
                 .ToArray();
             var names = methods.Select(m => m.GetCustomAttribute<UnityMcpToolAttribute>(false).Name).ToArray();
-            Assert.That(names, Has.Length.EqualTo(48));
-            Assert.That(names.Distinct().Count(), Is.EqualTo(48));
+            Assert.That(names, Is.Not.Empty);
+            Assert.That(names.Distinct().Count(), Is.EqualTo(names.Length));
         }
 
         [Test]

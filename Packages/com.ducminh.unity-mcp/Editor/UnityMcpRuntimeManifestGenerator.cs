@@ -49,15 +49,43 @@ namespace DucMinh.UnityMcp.Editor
                 parameters = m.GetParameters().Select(p => p.ParameterType.AssemblyQualifiedName).ToArray()
             }).ToArray();
             var manifest = JsonConvert.SerializeObject(new { entries }, Formatting.Indented);
-            var assemblies = methods.GroupBy(m => m.DeclaringType.Assembly.GetName().Name).OrderBy(g => g.Key);
+            // Reflection-only runtime integrations (for example the Input System) have no direct
+            // C# assembly reference. Preserve their required assembly only when it is installed
+            // in this project so IL2CPP does not strip the type before the registry availability
+            // check runs in the Development Player.
+            var assemblyNames = methods.Select(m => m.DeclaringType.Assembly.GetName().Name)
+                .Concat(methods.Select(m => FindRequiredType(m.GetCustomAttribute<UnityMcpToolAttribute>(false)?.RequiredType))
+                    .Where(type => type != null)
+                    .Select(type => type.Assembly.GetName().Name))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
             var lines = new List<string> { "<linker>" };
-            foreach (var assembly in assemblies)
+            foreach (var assemblyName in assemblyNames)
             {
-                lines.Add($"  <assembly fullname=\"{SecurityElement.Escape(assembly.Key)}\" preserve=\"all\" />");
+                lines.Add($"  <assembly fullname=\"{SecurityElement.Escape(assemblyName)}\" preserve=\"all\" />");
             }
             lines.Add("</linker>");
             var changed = WriteIfChanged(ManifestAssetPath, manifest) | WriteIfChanged(LinkAssetPath, string.Join("\n", lines) + "\n");
             if (changed) AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+        }
+
+        private static Type FindRequiredType(string requiredType)
+        {
+            if (string.IsNullOrWhiteSpace(requiredType)) return null;
+            var direct = Type.GetType(requiredType, false);
+            if (direct != null) return direct;
+            var typeName = requiredType.Split(',')[0].Trim();
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    var type = assembly.GetType(typeName, false);
+                    if (type != null) return type;
+                }
+                catch { }
+            }
+            return null;
         }
 
         private static bool WriteIfChanged(string assetPath, string content)

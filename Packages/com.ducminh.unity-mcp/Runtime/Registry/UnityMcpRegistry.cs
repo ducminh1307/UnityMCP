@@ -82,6 +82,7 @@ namespace DucMinh.UnityMcp
             {
                 var attribute = method.GetCustomAttribute<UnityMcpToolAttribute>(false);
                 if (attribute == null || (attribute.Scope & activeScope) == 0) continue;
+                if (!IsRequiredTypeAvailable(attribute.RequiredType)) continue;
                 var builtIn = IsBuiltIn(method);
                 if (!method.IsStatic || method.ContainsGenericParameters || !ValidName.IsMatch(attribute.Name) || (!builtIn && !method.IsPublic))
                 {
@@ -319,6 +320,18 @@ namespace DucMinh.UnityMcp
         private static bool IsRootObjectSchema(Dictionary<string, object> schema)
         {
             return schema != null && schema.TryGetValue("type", out var value) && Convert.ToString(value) == "object";
+        }
+
+        private static bool IsRequiredTypeAvailable(string requiredType)
+        {
+            if (string.IsNullOrWhiteSpace(requiredType)) return true;
+            if (Type.GetType(requiredType, false) != null) return true;
+            var typeName = requiredType.Split(',')[0].Trim();
+            return AppDomain.CurrentDomain.GetAssemblies().Any(assembly =>
+            {
+                try { return assembly.GetType(typeName, false) != null; }
+                catch { return false; }
+            });
         }
 
         private static IEnumerable<MethodInfo> DiscoverByReflection()

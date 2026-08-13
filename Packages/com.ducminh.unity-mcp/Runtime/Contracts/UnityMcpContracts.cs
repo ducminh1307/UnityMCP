@@ -27,6 +27,12 @@ namespace DucMinh.UnityMcp
         public bool MainThread { get; set; } = true;
         public int TimeoutMs { get; set; } = 30000;
         public Type SchemaProvider { get; set; }
+        /// <summary>
+        /// Optional assembly-qualified type that must be present before this tool is
+        /// registered. It keeps integrations for optional Unity packages out of the
+        /// live MCP catalog when that package is not installed in the target.
+        /// </summary>
+        public string RequiredType { get; set; }
     }
 
     public sealed class UnityMcpContext
