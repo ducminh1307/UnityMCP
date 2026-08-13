@@ -97,6 +97,25 @@ namespace DucMinh.UnityMcp.Tests
         }
 
         [Test]
+        public void BatchEnablement_UpdatesAllTools_WithSingleChangeEvent()
+        {
+            var mutation = GetType().GetMethod(nameof(ProjectMutation), BindingFlags.Static | BindingFlags.Public);
+            var values = GetType().GetMethod(nameof(EchoUnityValues), BindingFlags.Static | BindingFlags.Public);
+            UnityMcpRegistry.DiscoveryOverride = () => new[] { mutation, values };
+            var registry = new UnityMcpRegistry(UnityMcpScope.Editor);
+            registry.Reload();
+            var revisionBefore = registry.RegistryRevision;
+            var changeCount = 0;
+            registry.Changed += () => changeCount++;
+
+            registry.SetEnabled(new[] { "project-test-mutation", "project-test-unity-values" }, true);
+
+            Assert.That(registry.Tools.All(tool => tool.enabled), Is.True);
+            Assert.That(registry.RegistryRevision, Is.Not.EqualTo(revisionBefore));
+            Assert.That(changeCount, Is.EqualTo(1));
+        }
+
+        [Test]
         public void OpaqueContractWithoutProvider_IsRejected()
         {
             var method = GetType().GetMethod(nameof(InvalidOpaque), BindingFlags.Static | BindingFlags.Public);

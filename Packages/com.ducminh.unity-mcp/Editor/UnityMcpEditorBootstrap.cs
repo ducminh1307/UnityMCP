@@ -130,6 +130,9 @@ namespace DucMinh.UnityMcp.Editor
         private DropdownField safetyFilterField;
         private Toggle enabledOnlyToggle;
         private Toggle customOnlyToggle;
+        private Button enableVisibleToolsButton;
+        private Button disableVisibleToolsButton;
+        private Button enableSafeReadToolsButton;
         private Label toolFilterSummaryLabel;
         private ScrollView toolsScrollView;
         private VisualElement toolsContainer;
@@ -215,42 +218,38 @@ namespace DucMinh.UnityMcp.Editor
             header.AddToClassList("unity-mcp-header");
             parent.Add(header);
 
+            var identity = new VisualElement { name = "unity-mcp-header-identity" };
+            identity.AddToClassList("unity-mcp-header__identity");
+            identity.Add(new Label("M") { name = "unity-mcp-brand-mark" }.WithClass("unity-mcp-brand-mark"));
+
             var copy = new VisualElement();
             copy.AddToClassList("unity-mcp-header__copy");
-            copy.Add(new Label("UNITY DEVELOPMENT BRIDGE") { name = "unity-mcp-eyebrow" }.WithClass("unity-mcp-header__eyebrow"));
             copy.Add(new Label("UnityMCP") { name = "unity-mcp-title" }.WithClass("unity-mcp-header__title"));
-            copy.Add(new Label("Connect this Editor to an MCP client, then control exactly which tools are available.") { name = "unity-mcp-subtitle" }.WithClass("unity-mcp-header__subtitle"));
-            header.Add(copy);
+            copy.Add(new Label("Secure local development bridge for Unity") { name = "unity-mcp-subtitle" }.WithClass("unity-mcp-header__subtitle"));
+            identity.Add(copy);
+            header.Add(identity);
 
-            var actions = new VisualElement { name = "unity-mcp-header-actions" };
-            actions.AddToClassList("unity-mcp-action-row");
-            header.Add(actions);
+            var metadata = new VisualElement { name = "unity-mcp-header-metadata" };
+            metadata.AddToClassList("unity-mcp-header__metadata");
 
             var status = new VisualElement { name = "unity-mcp-header-status" };
-            status.AddToClassList("unity-mcp-status");
+            status.AddToClassList("unity-mcp-status-pill");
             headerGatewayStatusDot = new VisualElement { name = "unity-mcp-header-status-dot" };
             headerGatewayStatusDot.AddToClassList("unity-mcp-status__icon");
             headerGatewayStatusLabel = new Label("Stopped");
             headerGatewayStatusLabel.AddToClassList("unity-mcp-status__title");
-            headerToolSummaryLabel = new Label("Tools loading");
-            headerToolSummaryLabel.AddToClassList("unity-mcp-status__detail");
             status.Add(headerGatewayStatusDot);
             status.Add(headerGatewayStatusLabel);
-            status.Add(headerToolSummaryLabel);
-            actions.Add(status);
+            metadata.Add(status);
 
-            gatewayActionButton = new Button(HandleGatewayPrimaryAction) { name = "unity-mcp-gateway-primary", text = "Start gateway", tooltip = "Start this Editor's Streamable HTTP gateway." };
-            gatewayActionButton.AddToClassList("unity-mcp-primary-button");
-            gatewayConfigureCodexButton = new Button(ConfigureCodexForProject) { name = "unity-mcp-gateway-configure-codex", text = "Configure Codex", tooltip = "Create or update this project's .codex/config.toml and keep it synchronized with the gateway." };
-            gatewayConfigureCodexButton.AddToClassList("unity-mcp-primary-button");
-            gatewayCopyConfigButton = new Button(CopyGatewayClientConfiguration) { name = "unity-mcp-gateway-copy-config", text = "Copy MCP config", tooltip = "Copy connection details for another MCP client." };
-            gatewayCopyConfigButton.AddToClassList("unity-mcp-secondary-button");
-            gatewayStopButton = new Button(StopGateway) { name = "unity-mcp-gateway-stop", text = "Stop", tooltip = "Stop only the gateway owned by this Editor." };
-            gatewayStopButton.AddToClassList("unity-mcp-secondary-button");
-            actions.Add(gatewayActionButton);
-            actions.Add(gatewayConfigureCodexButton);
-            actions.Add(gatewayCopyConfigButton);
-            actions.Add(gatewayStopButton);
+            headerToolSummaryLabel = new Label("Tools loading");
+            headerToolSummaryLabel.AddToClassList("unity-mcp-header__tool-summary");
+            metadata.Add(headerToolSummaryLabel);
+
+            var packageInfo = UnityEditor.PackageManager.PackageInfo.FindForAssetPath(StyleSheetPath);
+            if (!string.IsNullOrWhiteSpace(packageInfo?.version))
+                metadata.Add(new Label("v" + packageInfo.version).WithClass("unity-mcp-version-pill"));
+            header.Add(metadata);
         }
 
         private void BuildNavigation(VisualElement parent)
@@ -285,11 +284,7 @@ namespace DucMinh.UnityMcp.Editor
         private void BuildConnectionPage(ScrollView page)
         {
             page.contentContainer.AddToClassList("unity-mcp-stack");
-            page.contentContainer.Add(CreateHelp(
-                "Start the gateway, then configure Codex for this project with one click or copy the connection for another MCP client.",
-                "How it works"));
-
-            var gatewayCard = CreateCard("Local MCP gateway", "This is an optional Streamable HTTP connection for this exact Unity Editor instance.");
+            var gatewayCard = CreateCard("Local MCP gateway", "Connect this Editor to Codex or another MCP client over a project-scoped Streamable HTTP endpoint.");
             page.Add(gatewayCard);
 
             var gatewayStatus = new VisualElement { name = "unity-mcp-gateway-status" };
@@ -314,6 +309,29 @@ namespace DucMinh.UnityMcp.Editor
             gatewayEndpointRow.Add(gatewayEndpointLabel);
             gatewayCard.Add(gatewayEndpointRow);
 
+            var primaryActions = new VisualElement { name = "unity-mcp-gateway-primary-actions" };
+            primaryActions.AddToClassList("unity-mcp-primary-action-stack");
+            gatewayActionButton = new Button(HandleGatewayPrimaryAction) { name = "unity-mcp-gateway-primary", text = "Start gateway", tooltip = "Start this Editor's Streamable HTTP gateway." };
+            gatewayActionButton.AddToClassList("unity-mcp-primary-button");
+            gatewayActionButton.AddToClassList("unity-mcp-wide-button");
+            gatewayConfigureCodexButton = new Button(ConfigureCodexForProject) { name = "unity-mcp-gateway-configure-codex", text = "Configure Codex for this project", tooltip = "Create or update this project's .codex/config.toml and keep it synchronized with the gateway." };
+            gatewayConfigureCodexButton.AddToClassList("unity-mcp-primary-button");
+            gatewayConfigureCodexButton.AddToClassList("unity-mcp-wide-button");
+            primaryActions.Add(gatewayActionButton);
+            primaryActions.Add(gatewayConfigureCodexButton);
+            gatewayCard.Add(primaryActions);
+
+            var connectionActions = new VisualElement { name = "unity-mcp-gateway-connection-actions" };
+            connectionActions.AddToClassList("unity-mcp-action-row");
+            connectionActions.AddToClassList("unity-mcp-action-row--end");
+            gatewayCopyConfigButton = new Button(CopyGatewayClientConfiguration) { name = "unity-mcp-gateway-copy-config", text = "Copy MCP config", tooltip = "Copy connection details for another MCP client." };
+            gatewayCopyConfigButton.AddToClassList("unity-mcp-secondary-button");
+            gatewayStopButton = new Button(StopGateway) { name = "unity-mcp-gateway-stop", text = "Stop gateway", tooltip = "Stop only the gateway owned by this Editor." };
+            gatewayStopButton.AddToClassList("unity-mcp-danger-button");
+            connectionActions.Add(gatewayCopyConfigButton);
+            connectionActions.Add(gatewayStopButton);
+            gatewayCard.Add(connectionActions);
+
             gatewayFeedbackBox = new HelpBox(string.Empty, HelpBoxMessageType.Info) { name = "unity-mcp-gateway-feedback" };
             gatewayFeedbackBox.AddToClassList("unity-mcp-help");
             gatewayFeedbackBox.style.display = DisplayStyle.None;
@@ -323,11 +341,11 @@ namespace DucMinh.UnityMcp.Editor
             gatewayCard.Add(advanced);
             AddMutedLabel(advanced, "These settings are saved locally for this user and project. They are not stored in Assets or source control.", 7);
 
-            executablePathField = new TextField("Gateway executable") { name = "unity-mcp-gateway-executable", isDelayed = true, tooltip = "Path to unity-mcp.exe (or unity-mcp on macOS/Linux)." };
-            executablePathField.AddToClassList("unity-mcp-form-row__field");
-            advanced.Add(executablePathField);
+            executablePathField = new TextField { name = "unity-mcp-gateway-executable", isDelayed = true, tooltip = "Path to unity-mcp.exe (or unity-mcp on macOS/Linux)." };
+            advanced.Add(CreateFormRow("Gateway executable", executablePathField));
             var executableActions = new VisualElement();
             executableActions.AddToClassList("unity-mcp-action-row");
+            executableActions.AddToClassList("unity-mcp-form-actions");
             var browseButton = new Button(BrowseForGatewayExecutable) { name = "unity-mcp-gateway-browse", text = "Browse", tooltip = "Choose the unity-mcp executable in your Python virtual environment." };
             browseButton.AddToClassList("unity-mcp-secondary-button");
             var useDefaultButton = new Button(() =>
@@ -340,16 +358,14 @@ namespace DucMinh.UnityMcp.Editor
             executableActions.Add(useDefaultButton);
             advanced.Add(executableActions);
 
-            var endpointFields = new VisualElement();
-            endpointFields.AddToClassList("unity-mcp-inline-fields");
-            portField = new IntegerField("Preferred port") { name = "unity-mcp-gateway-port", isDelayed = true, tooltip = "Uses another loopback port automatically if this one is busy." };
-            mcpPathField = new TextField("MCP path") { name = "unity-mcp-gateway-path", isDelayed = true, tooltip = "The local Streamable HTTP path; /mcp is recommended." };
-            endpointFields.Add(portField);
-            endpointFields.Add(mcpPathField);
-            advanced.Add(endpointFields);
+            portField = new IntegerField { name = "unity-mcp-gateway-port", isDelayed = true, tooltip = "Uses another loopback port automatically if this one is busy." };
+            mcpPathField = new TextField { name = "unity-mcp-gateway-path", isDelayed = true, tooltip = "The local Streamable HTTP path; /mcp is recommended." };
+            advanced.Add(CreateFormRow("Preferred port", portField));
+            advanced.Add(CreateFormRow("MCP path", mcpPathField));
 
             var settingsActions = new VisualElement();
             settingsActions.AddToClassList("unity-mcp-action-row");
+            settingsActions.AddToClassList("unity-mcp-form-actions");
             saveGatewaySettingsButton = new Button(() => SaveGatewaySettings()) { name = "unity-mcp-gateway-save", text = "Save changes" };
             saveGatewaySettingsButton.AddToClassList("unity-mcp-secondary-button");
             settingsActions.Add(saveGatewaySettingsButton);
@@ -364,7 +380,11 @@ namespace DucMinh.UnityMcp.Editor
             AddMutedLabel(security, "Configure Codex writes the bearer token to this project's ignored .codex/config.toml. Copy MCP config places it on the clipboard.", 7);
             regenerateGatewayTokenButton = new Button(RegenerateGatewayToken) { name = "unity-mcp-gateway-regenerate-token", text = "Regenerate token", tooltip = "Creates a new local token after the gateway is stopped." };
             regenerateGatewayTokenButton.AddToClassList("unity-mcp-danger-button");
-            security.Add(regenerateGatewayTokenButton);
+            var securityActions = new VisualElement();
+            securityActions.AddToClassList("unity-mcp-action-row");
+            securityActions.AddToClassList("unity-mcp-form-actions");
+            securityActions.Add(regenerateGatewayTokenButton);
+            security.Add(securityActions);
         }
 
         private void BuildToolsPage(VisualElement page)
@@ -372,26 +392,27 @@ namespace DucMinh.UnityMcp.Editor
             var pageHeader = new VisualElement();
             pageHeader.AddToClassList("unity-mcp-stack");
             page.Add(pageHeader);
-            pageHeader.Add(CreateHelp("Only enabled tools are advertised to MCP clients. Custom, write, destructive, and unsafe tools require explicit local opt-in.", "Permissions"));
 
-            var toolbar = new VisualElement { name = "unity-mcp-tool-toolbar" };
-            toolbar.AddToClassList("unity-mcp-tool-toolbar");
-            pageHeader.Add(toolbar);
+            var filterCard = CreateCard("Tool permissions", "Only enabled tools are advertised to MCP clients. Custom, write, destructive, and unsafe tools require explicit local opt-in.");
+            filterCard.AddToClassList("unity-mcp-tool-filter-card");
+            pageHeader.Add(filterCard);
 
             toolSearchField = new ToolbarSearchField { name = "unity-mcp-tool-search", tooltip = "Search tool name, title, description, category, or source." };
             toolSearchField.AddToClassList("unity-mcp-tool-toolbar__search");
             toolSearchField.RegisterValueChangedCallback(_ => ApplyToolFilter());
-            toolbar.Add(toolSearchField);
+            filterCard.Add(CreateFormRow("Search", toolSearchField));
 
-            safetyFilterField = new DropdownField("Safety", new List<string>(SafetyFilterChoices), 0) { name = "unity-mcp-tool-safety-filter", tooltip = "Filter by safety tier." };
+            safetyFilterField = new DropdownField(new List<string>(SafetyFilterChoices), 0) { name = "unity-mcp-tool-safety-filter", tooltip = "Filter by safety tier." };
             safetyFilterField.AddToClassList("unity-mcp-tool-toolbar__filter");
             safetyFilterField.RegisterValueChangedCallback(_ => ApplyToolFilter());
-            toolbar.Add(safetyFilterField);
+            filterCard.Add(CreateFormRow("Safety", safetyFilterField));
 
             var toolbarActions = new VisualElement();
             toolbarActions.AddToClassList("unity-mcp-tool-toolbar__actions");
             enabledOnlyToggle = new Toggle("Enabled only") { name = "unity-mcp-tool-enabled-filter", tooltip = "Show only currently enabled tools." };
             customOnlyToggle = new Toggle("Custom only") { name = "unity-mcp-tool-custom-filter", tooltip = "Show only project-defined custom tools." };
+            enabledOnlyToggle.AddToClassList("unity-mcp-tool-option");
+            customOnlyToggle.AddToClassList("unity-mcp-tool-option");
             enabledOnlyToggle.RegisterValueChangedCallback(_ => ApplyToolFilter());
             customOnlyToggle.RegisterValueChangedCallback(_ => ApplyToolFilter());
             var reloadButton = new Button(ReloadRegistry) { name = "unity-mcp-tool-reload", text = "Reload", tooltip = "Rescan built-in and custom UnityMCP tools." };
@@ -399,11 +420,24 @@ namespace DucMinh.UnityMcp.Editor
             toolbarActions.Add(enabledOnlyToggle);
             toolbarActions.Add(customOnlyToggle);
             toolbarActions.Add(reloadButton);
-            toolbar.Add(toolbarActions);
+            filterCard.Add(CreateFormRow("Show", toolbarActions));
+
+            var bulkActions = new VisualElement { name = "unity-mcp-tool-bulk-actions" };
+            bulkActions.AddToClassList("unity-mcp-tool-bulk-actions");
+            enableVisibleToolsButton = new Button(EnableVisibleTools) { name = "unity-mcp-tool-enable-visible", text = "Enable shown", tooltip = "Enable every currently shown tool. Search and filters determine the selection." };
+            enableVisibleToolsButton.AddToClassList("unity-mcp-primary-button");
+            disableVisibleToolsButton = new Button(DisableVisibleTools) { name = "unity-mcp-tool-disable-visible", text = "Disable shown", tooltip = "Disable every currently shown tool. Search and filters determine the selection." };
+            disableVisibleToolsButton.AddToClassList("unity-mcp-secondary-button");
+            enableSafeReadToolsButton = new Button(EnableSafeReadTools) { name = "unity-mcp-tool-enable-safe-read", text = "Enable safe-read", tooltip = "Enable every available safe-read tool, regardless of the current filter." };
+            enableSafeReadToolsButton.AddToClassList("unity-mcp-secondary-button");
+            bulkActions.Add(enableVisibleToolsButton);
+            bulkActions.Add(disableVisibleToolsButton);
+            bulkActions.Add(enableSafeReadToolsButton);
+            filterCard.Add(CreateFormRow("Bulk actions", bulkActions));
 
             toolFilterSummaryLabel = new Label("Tools are loading.") { name = "unity-mcp-tool-summary" };
             toolFilterSummaryLabel.AddToClassList("unity-mcp-tool-summary");
-            pageHeader.Add(toolFilterSummaryLabel);
+            filterCard.Add(toolFilterSummaryLabel);
 
             toolsScrollView = new ScrollView(ScrollViewMode.Vertical) { name = "unity-mcp-tool-scroll" };
             toolsScrollView.AddToClassList("unity-mcp-scroll");
@@ -417,17 +451,16 @@ namespace DucMinh.UnityMcp.Editor
         private void BuildRuntimePage(ScrollView page)
         {
             page.contentContainer.AddToClassList("unity-mcp-stack");
-            page.contentContainer.Add(CreateHelp("Runtime tools are intentionally separate: they run only in a desktop Development Player with an explicitly baked profile.", "Development Player"));
-
-            var runtimeCard = CreateCard("Development Player runtime profile", "Create the profile once before building a desktop Development Player. Release builds never expose the runtime bridge.");
+            var runtimeCard = CreateCard("Development Player runtime", "Runtime tools are intentionally separate. Create an explicit profile before building a desktop Development Player; release builds never expose the bridge.");
             page.Add(runtimeCard);
             runtimeProfileStatusLabel = new Label { name = "unity-mcp-runtime-status" };
-            runtimeProfileStatusLabel.AddToClassList("unity-mcp-status__detail");
-            runtimeCard.Add(runtimeProfileStatusLabel);
+            runtimeProfileStatusLabel.AddToClassList("unity-mcp-runtime-status");
+            runtimeCard.Add(CreateFormRow("Profile", runtimeProfileStatusLabel));
             var runtimeActions = new VisualElement();
-            runtimeActions.AddToClassList("unity-mcp-action-row");
+            runtimeActions.AddToClassList("unity-mcp-primary-action-stack");
             runtimePrimaryButton = new Button(HandleRuntimeProfileAction) { name = "unity-mcp-runtime-primary", text = "Create runtime profile" };
             runtimePrimaryButton.AddToClassList("unity-mcp-primary-button");
+            runtimePrimaryButton.AddToClassList("unity-mcp-wide-button");
             runtimeActions.Add(runtimePrimaryButton);
             runtimeCard.Add(runtimeActions);
         }
@@ -446,16 +479,17 @@ namespace DucMinh.UnityMcp.Editor
             return card;
         }
 
-        private static VisualElement CreateHelp(string message, string title)
+        private static VisualElement CreateFormRow(string label, VisualElement field)
         {
-            var help = new VisualElement();
-            help.AddToClassList("unity-mcp-help");
-            help.Add(new Label("i").WithClass("unity-mcp-help__icon"));
-            var copy = new VisualElement();
-            copy.Add(new Label(title).WithClass("unity-mcp-card__title"));
-            copy.Add(new Label(message).WithClass("unity-mcp-help__content"));
-            help.Add(copy);
-            return help;
+            var row = new VisualElement();
+            row.AddToClassList("unity-mcp-form-row");
+            row.Add(new Label(label).WithClass("unity-mcp-form-row__label"));
+            var fieldContainer = new VisualElement();
+            fieldContainer.AddToClassList("unity-mcp-form-row__field");
+            field.AddToClassList("unity-mcp-form-row__control");
+            fieldContainer.Add(field);
+            row.Add(fieldContainer);
+            return row;
         }
 
         private static void AddMutedLabel(VisualElement parent, string text, int bottomMargin = 0)
@@ -512,6 +546,7 @@ namespace DucMinh.UnityMcp.Editor
             if (registry == null)
             {
                 SetToolSummary("Tools are loading.");
+                RefreshBulkActionButtons(Array.Empty<UnityMcpToolDescriptor>(), Array.Empty<UnityMcpToolDescriptor>());
                 toolsContainer.Add(CreateEmptyState("Waiting for the UnityMCP registry", "Tool permissions appear after Unity has discovered the current project's tools."));
                 return;
             }
@@ -519,6 +554,7 @@ namespace DucMinh.UnityMcp.Editor
             var allTools = registry.Tools.OrderBy(tool => tool.category ?? "project", StringComparer.OrdinalIgnoreCase).ThenBy(tool => tool.name, StringComparer.Ordinal).ToList();
             var visibleTools = allTools.Where(MatchesActiveToolFilter).ToList();
             var enabledCount = allTools.Count(tool => tool.enabled);
+            RefreshBulkActionButtons(allTools, visibleTools);
             headerToolSummaryLabel.text = enabledCount + " / " + allTools.Count + " tools enabled";
             if (toolsPageButton != null) toolsPageButton.text = "Tools (" + allTools.Count + ")";
             SetToolSummary(visibleTools.Count + " of " + allTools.Count + " tools shown - " + enabledCount + " enabled");
@@ -544,6 +580,69 @@ namespace DucMinh.UnityMcp.Editor
             RebuildToolList();
         }
 
+        private void RefreshBulkActionButtons(IReadOnlyCollection<UnityMcpToolDescriptor> allTools, IReadOnlyCollection<UnityMcpToolDescriptor> visibleTools)
+        {
+            var visibleDisabled = visibleTools.Count(tool => !tool.enabled);
+            var visibleEnabled = visibleTools.Count(tool => tool.enabled);
+            var safeReadDisabled = allTools.Count(tool => !tool.enabled && string.Equals(tool.safety, "safe-read", StringComparison.OrdinalIgnoreCase));
+            if (enableVisibleToolsButton != null)
+            {
+                enableVisibleToolsButton.text = "Enable shown (" + visibleDisabled + ")";
+                enableVisibleToolsButton.SetEnabled(visibleDisabled > 0);
+            }
+            if (disableVisibleToolsButton != null)
+            {
+                disableVisibleToolsButton.text = "Disable shown (" + visibleEnabled + ")";
+                disableVisibleToolsButton.SetEnabled(visibleEnabled > 0);
+            }
+            if (enableSafeReadToolsButton != null)
+            {
+                enableSafeReadToolsButton.text = "Enable safe-read (" + safeReadDisabled + ")";
+                enableSafeReadToolsButton.SetEnabled(safeReadDisabled > 0);
+            }
+        }
+
+        private void EnableVisibleTools() => ApplyBulkToolEnablement(GetVisibleTools(), true, "shown");
+
+        private void DisableVisibleTools() => ApplyBulkToolEnablement(GetVisibleTools(), false, "shown");
+
+        private void EnableSafeReadTools()
+        {
+            var registry = UnityMcpEditorBootstrap.Registry;
+            ApplyBulkToolEnablement(registry?.Tools.Where(tool => string.Equals(tool.safety, "safe-read", StringComparison.OrdinalIgnoreCase)), true, "safe-read");
+        }
+
+        private IEnumerable<UnityMcpToolDescriptor> GetVisibleTools()
+        {
+            return UnityMcpEditorBootstrap.Registry?.Tools.Where(MatchesActiveToolFilter) ?? Enumerable.Empty<UnityMcpToolDescriptor>();
+        }
+
+        private void ApplyBulkToolEnablement(IEnumerable<UnityMcpToolDescriptor> tools, bool enabled, string selectionLabel)
+        {
+            var registry = UnityMcpEditorBootstrap.Registry;
+            if (registry == null) return;
+            var targets = (tools ?? Enumerable.Empty<UnityMcpToolDescriptor>()).Where(tool => tool.enabled != enabled).ToList();
+            if (targets.Count == 0) return;
+            if (enabled && !ConfirmBulkToolEnablement(targets, selectionLabel)) return;
+            registry.SetEnabled(targets.Select(tool => tool.name), enabled);
+            ShowNotification(new GUIContent((enabled ? "Enabled " : "Disabled ") + targets.Count + " tools."));
+        }
+
+        private static bool ConfirmBulkToolEnablement(IReadOnlyCollection<UnityMcpToolDescriptor> tools, string selectionLabel)
+        {
+            var destructiveCount = tools.Count(tool => string.Equals(tool.safety, "destructive", StringComparison.OrdinalIgnoreCase));
+            var unsafeCount = tools.Count(tool => string.Equals(tool.safety, "unsafe", StringComparison.OrdinalIgnoreCase));
+            if (destructiveCount == 0 && unsafeCount == 0) return true;
+            var riskySummary = new List<string>();
+            if (destructiveCount > 0) riskySummary.Add(destructiveCount + " destructive");
+            if (unsafeCount > 0) riskySummary.Add(unsafeCount + " unsafe");
+            return EditorUtility.DisplayDialog(
+                "Enable multiple UnityMCP tools",
+                "Enable " + tools.Count + " " + selectionLabel + " tools? This selection includes " + string.Join(" and ", riskySummary) + " tools. Connected MCP clients can call them until you disable them again. Use the Safety filter to narrow the selection if needed.",
+                "Enable " + tools.Count + " tools",
+                "Cancel");
+        }
+
         private VisualElement CreateToolGroup(string category, List<UnityMcpToolDescriptor> tools, bool hasSearch)
         {
             var group = new Foldout { name = "unity-mcp-tool-category-" + ToElementIdentifier(category) };
@@ -552,7 +651,26 @@ namespace DucMinh.UnityMcp.Editor
             var defaultExpanded = tools.Any(tool => tool.enabled);
             group.SetValueWithoutNotify(hasSearch || SessionState.GetBool(categoryStateKey, defaultExpanded));
             group.text = FormatCategory(category) + "  " + tools.Count(tool => tool.enabled) + "/" + tools.Count + " enabled";
-            group.Q<Toggle>()?.AddToClassList("unity-mcp-tool-group__header");
+            var groupHeader = group.Q<Toggle>();
+            if (groupHeader != null)
+            {
+                groupHeader.AddToClassList("unity-mcp-tool-group__header");
+                var groupActions = new VisualElement();
+                groupActions.AddToClassList("unity-mcp-tool-group__actions");
+                var disabledCount = tools.Count(tool => !tool.enabled);
+                var enabledCount = tools.Count(tool => tool.enabled);
+                var enableButton = new Button(() => ApplyBulkToolEnablement(tools, true, FormatCategory(category))) { text = "Enable (" + disabledCount + ")", tooltip = "Enable the currently shown tools in this category." };
+                enableButton.AddToClassList("unity-mcp-tool-group__action");
+                enableButton.SetEnabled(disabledCount > 0);
+                enableButton.RegisterCallback<ClickEvent>(click => click.StopPropagation());
+                var disableButton = new Button(() => ApplyBulkToolEnablement(tools, false, FormatCategory(category))) { text = "Disable (" + enabledCount + ")", tooltip = "Disable the currently shown tools in this category." };
+                disableButton.AddToClassList("unity-mcp-tool-group__action");
+                disableButton.SetEnabled(enabledCount > 0);
+                disableButton.RegisterCallback<ClickEvent>(click => click.StopPropagation());
+                groupActions.Add(enableButton);
+                groupActions.Add(disableButton);
+                groupHeader.Add(groupActions);
+            }
             group.RegisterValueChangedCallback(change => SessionState.SetBool(categoryStateKey, change.newValue));
             foreach (var tool in tools) group.Add(CreateToolRow(UnityMcpEditorBootstrap.Registry, tool));
             return group;

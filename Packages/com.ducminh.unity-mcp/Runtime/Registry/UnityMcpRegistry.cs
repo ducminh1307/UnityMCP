@@ -63,10 +63,19 @@ namespace DucMinh.UnityMcp
 
         public void SetEnabled(string toolName, bool enabled)
         {
-            enablement.SetOverride(toolName, enabled);
+            SetEnabled(new[] { toolName }, enabled);
+        }
+
+        public void SetEnabled(IEnumerable<string> toolNames, bool enabled)
+        {
+            if (toolNames == null) throw new ArgumentNullException(nameof(toolNames));
+            var names = toolNames.Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.Ordinal).ToArray();
+            if (names.Length == 0) return;
+            foreach (var toolName in names) enablement.SetOverride(toolName, enabled);
             lock (gate)
             {
-                if (bindings.TryGetValue(toolName, out var binding)) binding.Descriptor.enabled = enabled;
+                foreach (var toolName in names)
+                    if (bindings.TryGetValue(toolName, out var binding)) binding.Descriptor.enabled = enabled;
                 revision = Guid.NewGuid().ToString("N");
             }
             Changed?.Invoke();
