@@ -55,10 +55,17 @@ then emits `UNITY_MCP_READY {...}` to stderr only after its loopback endpoint is
 bound, and exits when that Unity process stops. This flag is HTTP-only; stdio is
 still launched and owned by the MCP client.
 
-When that gateway is running, **Configure Codex** creates or updates the trusted
-Unity project's `.codex/config.toml`. UnityMCP preserves unrelated Codex settings,
-locally excludes the token-bearing file from Git, and keeps its marked MCP entry
-synchronized when the gateway port or token changes.
+When that gateway is running, choose the project configuration action for Codex,
+Antigravity, or Claude Code. UnityMCP writes only inside the current Unity project:
+`.codex/config.toml`, `.agents/mcp_config.json`, or `.mcp.json`, respectively. It
+preserves unrelated settings, locally excludes each token-bearing file from Git, and
+keeps configured UnityMCP entries synchronized when the gateway port or token changes.
+Each action also installs an instruction-only `unity-mcp` skill inside the current
+project so the client proactively uses live UnityMCP tools for Unity work even when the
+prompt does not mention MCP. Codex and Antigravity use
+`.agents/skills/unity-mcp/SKILL.md`; Claude Code uses
+`.claude/skills/unity-mcp/SKILL.md`. No global or user-level MCP configuration or skill
+is modified.
 
 The catalog is source-validated: only contracts with a compiled Unity handler are
 marked implemented. The 20 explicitly allowlisted, built-in `safe-read` tools are

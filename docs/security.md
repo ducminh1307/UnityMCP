@@ -34,17 +34,26 @@ convenience storage, not a defense against another process running as the same u
 The token is never supplied on the Python command line. Unity passes it through the
 `UNITY_MCP_HTTP_TOKEN` child-process environment variable, and the Python readiness
 and parent-exit events contain no token. The UI does not display the secret in a text
-field. An explicit **Configure Codex** action writes it to the trusted project's
-`.codex/config.toml`; in Git repositories UnityMCP adds that exact path to the local
-`.git/info/exclude` without changing shared ignore rules. An explicit **Copy MCP config**
-action places a configuration containing the `Authorization: Bearer <token>` header on
-the clipboard. Never force-add the generated file, and remove the header before sharing
-client configuration or diagnostics.
+field. Explicit client actions write it only to the trusted project's
+`.codex/config.toml` (Codex), `.agents/mcp_config.json` (Antigravity), or `.mcp.json`
+(Claude Code). UnityMCP never changes a global or user-level client config. In Git
+repositories it adds the selected exact path to local `.git/info/exclude` without
+changing shared ignore rules. An explicit **Copy MCP config** action places configuration
+containing the `Authorization: Bearer <token>` header on the clipboard. Never force-add
+the generated files, and remove the header before sharing client configuration or
+diagnostics.
+
+Client setup also writes an instruction-only project skill to
+`.agents/skills/unity-mcp/SKILL.md` for Codex and Antigravity or
+`.claude/skills/unity-mcp/SKILL.md` for Claude Code. These skill files contain no endpoint
+or bearer token and no global skill location is touched. A managed marker permits safe
+refreshes; an existing unmarked skill at the same path is never overwritten.
 
 The gateway can be stopped and its token regenerated only while stopped. Rotation
 invalidates every copied client configuration that used the old value. After the gateway
-starts again, UnityMCP automatically refreshes a previously managed project-scoped Codex
-entry; other MCP clients need a replacement copied configuration. The actual TCP port
+starts again, UnityMCP automatically refreshes previously managed project-scoped Codex,
+Antigravity, and Claude Code entries. Other MCP clients need a replacement copied
+configuration. The actual TCP port
 may differ from the preferred port when another local gateway is already using that port,
 so clients must use the generated endpoint rather than guessing a port.
 

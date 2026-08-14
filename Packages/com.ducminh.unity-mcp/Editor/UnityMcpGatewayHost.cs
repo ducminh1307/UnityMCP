@@ -359,29 +359,47 @@ namespace DucMinh.UnityMcp.Editor
         }
 
         /// <summary>
-        /// Returns connection details for the desktop UI plus a ready-to-paste Codex TOML
-        /// fragment. The bearer token is included, so callers must make copying this an
-        /// explicit user action and must not log it. Returns null until the gateway is ready.
+        /// Returns connection details plus ready-to-paste project configuration fragments for
+        /// Codex, Antigravity, and Claude Code. The bearer token is included, so callers must
+        /// make copying this an explicit user action and must not log it.
         /// </summary>
         public static string GetClientConfigurationText()
         {
             var connection = GetConnectionInfo();
             if (connection == null || GetStatus().State != UnityMcpGatewayState.Running) return null;
-            var serverName = GetCodexServerName();
-            return "# ChatGPT Desktop / Codex app\n"
-                + "# Type: Streamable HTTP\n"
+            var serverName = GetProjectServerName();
+            return "# Generic Streamable HTTP connection\n"
                 + "# URL: " + connection.Endpoint + "\n"
-                + "# Bearer token: " + connection.BearerToken + "\n\n"
-                + "# Or paste into .codex/config.toml for this project\n"
+                + "# Authorization: Bearer " + connection.BearerToken + "\n\n"
+                + "# Codex: <project>/.codex/config.toml\n"
                 + "[mcp_servers." + serverName + "]\n"
                 + "url = \"" + connection.Endpoint + "\"\n"
-                + "http_headers = { Authorization = \"Bearer " + connection.BearerToken + "\" }\n";
+                + "http_headers = { Authorization = \"Bearer " + connection.BearerToken + "\" }\n\n"
+                + "# Antigravity: <project>/.agents/mcp_config.json\n"
+                + "{\n"
+                + "  \"mcpServers\": {\n"
+                + "    \"" + serverName + "\": {\n"
+                + "      \"serverUrl\": \"" + connection.Endpoint + "\",\n"
+                + "      \"headers\": { \"Authorization\": \"Bearer " + connection.BearerToken + "\" }\n"
+                + "    }\n"
+                + "  }\n"
+                + "}\n\n"
+                + "# Claude Code: <project>/.mcp.json\n"
+                + "{\n"
+                + "  \"mcpServers\": {\n"
+                + "    \"" + serverName + "\": {\n"
+                + "      \"type\": \"http\",\n"
+                + "      \"url\": \"" + connection.Endpoint + "\",\n"
+                + "      \"headers\": { \"Authorization\": \"Bearer " + connection.BearerToken + "\" }\n"
+                + "    }\n"
+                + "  }\n"
+                + "}\n";
         }
 
         /// <summary>
-        /// Writes this running gateway to the trusted project's .codex/config.toml. The generated
-        /// section is marked as UnityMCP-managed so later gateway restarts can refresh its port or
-        /// token automatically. Existing unrelated Codex settings are preserved.
+        /// Writes this running gateway and UnityMCP's proactive skill to the trusted project.
+        /// The generated Codex section is marked as managed so later gateway restarts can refresh
+        /// its port or token automatically. Existing unrelated Codex settings are preserved.
         /// </summary>
         public static bool TryConfigureCodexForProject(out string configPath, out string error)
         {
@@ -394,13 +412,65 @@ namespace DucMinh.UnityMcp.Editor
                 return false;
             }
 
-            return UnityMcpCodexProjectConfig.TryWrite(
+            if (!UnityMcpCodexProjectConfig.TryWrite(
                 GetProjectRootPath(),
-                GetCodexServerName(),
+                GetProjectServerName(),
                 connection.Endpoint,
                 connection.BearerToken,
                 out configPath,
-                out error);
+                out error)) return false;
+
+            if (UnityMcpProjectSkill.TryWrite(
+                GetProjectRootPath(),
+                UnityMcpSkillClient.AgentSkills,
+                out _,
+                out var skillError)) return true;
+            error = "The Codex MCP config was updated, but its project skill was not: " + skillError;
+            return false;
+        }
+
+        /// <summary>Writes this gateway and skill to this project's Antigravity workspace.</summary>
+        public static bool TryConfigureAntigravityForProject(out string configPath, out string error)
+        {
+            return TryConfigureJsonClientForProject(UnityMcpJsonClient.Antigravity, out configPath, out error);
+        }
+
+        /// <summary>Writes this gateway and skill to this project's Claude Code configuration.</summary>
+        public static bool TryConfigureClaudeForProject(out string configPath, out string error)
+        {
+            return TryConfigureJsonClientForProject(UnityMcpJsonClient.Claude, out configPath, out error);
+        }
+
+        private static bool TryConfigureJsonClientForProject(
+            UnityMcpJsonClient client,
+            out string configPath,
+            out string error)
+        {
+            configPath = null;
+            error = null;
+            var connection = GetConnectionInfo();
+            if (connection == null)
+            {
+                var clientName = client == UnityMcpJsonClient.Antigravity ? "Antigravity" : "Claude";
+                error = "Start the UnityMCP gateway before configuring " + clientName + " for this project.";
+                return false;
+            }
+
+            if (!UnityMcpJsonProjectConfig.TryWrite(
+                GetProjectRootPath(),
+                GetProjectServerName(),
+                connection.Endpoint,
+                connection.BearerToken,
+                client,
+                out configPath,
+                out error)) return false;
+
+            var skillClient = client == UnityMcpJsonClient.Claude
+                ? UnityMcpSkillClient.Claude
+                : UnityMcpSkillClient.AgentSkills;
+            if (UnityMcpProjectSkill.TryWrite(GetProjectRootPath(), skillClient, out _, out var skillError)) return true;
+            error = "The MCP config was updated, but its project skill was not: " + skillError;
+            return false;
         }
 
         /// <summary>Creates a new local bearer token. Stop the running gateway first.</summary>
@@ -457,18 +527,27 @@ namespace DucMinh.UnityMcp.Editor
                 }
             }
             if (changedStatus != null && changedStatus.State == UnityMcpGatewayState.Running)
-                RefreshManagedCodexProjectConfiguration();
+                RefreshManagedProjectConfigurations();
             if (changedStatus != null) RaiseStatusChanged(changedStatus);
             if (startAfterReload) Start(out _);
         }
 
-        private static void RefreshManagedCodexProjectConfiguration()
+        private static void RefreshManagedProjectConfigurations()
         {
             var projectRoot = GetProjectRootPath();
-            var serverName = GetCodexServerName();
-            if (!UnityMcpCodexProjectConfig.IsManaged(projectRoot, serverName)) return;
-            if (!TryConfigureCodexForProject(out _, out var error) && !string.IsNullOrWhiteSpace(error))
-                UnityEngine.Debug.LogWarning("UnityMCP could not refresh the local Codex project config: " + Sanitize(error));
+            var serverName = GetProjectServerName();
+            if (UnityMcpCodexProjectConfig.IsManaged(projectRoot, serverName)
+                && !TryConfigureCodexForProject(out _, out var codexError)
+                && !string.IsNullOrWhiteSpace(codexError))
+                UnityEngine.Debug.LogWarning("UnityMCP could not refresh the local Codex project config: " + Sanitize(codexError));
+            if (UnityMcpJsonProjectConfig.IsManaged(projectRoot, serverName, UnityMcpJsonClient.Antigravity)
+                && !TryConfigureAntigravityForProject(out _, out var antigravityError)
+                && !string.IsNullOrWhiteSpace(antigravityError))
+                UnityEngine.Debug.LogWarning("UnityMCP could not refresh the local Antigravity project config: " + Sanitize(antigravityError));
+            if (UnityMcpJsonProjectConfig.IsManaged(projectRoot, serverName, UnityMcpJsonClient.Claude)
+                && !TryConfigureClaudeForProject(out _, out var claudeError)
+                && !string.IsNullOrWhiteSpace(claudeError))
+                UnityEngine.Debug.LogWarning("UnityMCP could not refresh the local Claude project config: " + Sanitize(claudeError));
         }
 
         private static bool RefreshProcessStateLocked()
@@ -824,7 +903,7 @@ namespace DucMinh.UnityMcp.Editor
             return string.IsNullOrEmpty(result) ? "project" : result;
         }
 
-        private static string GetCodexServerName()
+        private static string GetProjectServerName()
         {
             return "unity_" + ToConfigIdentifier(Path.GetFileName(GetProjectRootPath())) + "_" + ProjectKey.Substring(0, 6);
         }

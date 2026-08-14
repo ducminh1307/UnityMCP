@@ -111,6 +111,8 @@ namespace DucMinh.UnityMcp.Editor
         private Label headerToolSummaryLabel;
         private Button gatewayActionButton;
         private Button gatewayConfigureCodexButton;
+        private Button gatewayConfigureAntigravityButton;
+        private Button gatewayConfigureClaudeButton;
         private Button gatewayCopyConfigButton;
         private Button gatewayStopButton;
 
@@ -289,7 +291,7 @@ namespace DucMinh.UnityMcp.Editor
         private void BuildConnectionPage(ScrollView page)
         {
             page.contentContainer.AddToClassList("unity-mcp-stack");
-            var gatewayCard = CreateCard("Local MCP gateway", "Connect this Editor to Codex or another MCP client over a project-scoped Streamable HTTP endpoint.");
+            var gatewayCard = CreateCard("Local MCP gateway", "Connect this Editor to Codex, Antigravity, or Claude Code over a project-scoped Streamable HTTP endpoint.");
             page.Add(gatewayCard);
 
             var gatewayStatus = new VisualElement { name = "unity-mcp-gateway-status" };
@@ -319,11 +321,19 @@ namespace DucMinh.UnityMcp.Editor
             gatewayActionButton = new Button(HandleGatewayPrimaryAction) { name = "unity-mcp-gateway-primary", text = "Start gateway", tooltip = "Start this Editor's Streamable HTTP gateway." };
             gatewayActionButton.AddToClassList("unity-mcp-primary-button");
             gatewayActionButton.AddToClassList("unity-mcp-wide-button");
-            gatewayConfigureCodexButton = new Button(ConfigureCodexForProject) { name = "unity-mcp-gateway-configure-codex", text = "Configure Codex for this project", tooltip = "Create or update this project's .codex/config.toml and keep it synchronized with the gateway." };
+            gatewayConfigureCodexButton = new Button(ConfigureCodexForProject) { name = "unity-mcp-gateway-configure-codex", text = "Configure Codex for this project", tooltip = "Update this project's .codex/config.toml and install its project-local UnityMCP skill." };
             gatewayConfigureCodexButton.AddToClassList("unity-mcp-primary-button");
             gatewayConfigureCodexButton.AddToClassList("unity-mcp-wide-button");
+            gatewayConfigureAntigravityButton = new Button(ConfigureAntigravityForProject) { name = "unity-mcp-gateway-configure-antigravity", text = "Configure Antigravity for this project", tooltip = "Update this project's .agents/mcp_config.json and install its project-local UnityMCP skill." };
+            gatewayConfigureAntigravityButton.AddToClassList("unity-mcp-primary-button");
+            gatewayConfigureAntigravityButton.AddToClassList("unity-mcp-wide-button");
+            gatewayConfigureClaudeButton = new Button(ConfigureClaudeForProject) { name = "unity-mcp-gateway-configure-claude", text = "Configure Claude for this project", tooltip = "Update this project's .mcp.json and install its project-local UnityMCP skill for Claude Code." };
+            gatewayConfigureClaudeButton.AddToClassList("unity-mcp-primary-button");
+            gatewayConfigureClaudeButton.AddToClassList("unity-mcp-wide-button");
             primaryActions.Add(gatewayActionButton);
             primaryActions.Add(gatewayConfigureCodexButton);
+            primaryActions.Add(gatewayConfigureAntigravityButton);
+            primaryActions.Add(gatewayConfigureClaudeButton);
             gatewayCard.Add(primaryActions);
 
             var connectionActions = new VisualElement { name = "unity-mcp-gateway-connection-actions" };
@@ -414,7 +424,7 @@ namespace DucMinh.UnityMcp.Editor
 
             var security = new Foldout { name = "unity-mcp-gateway-security", text = "Security", value = false };
             gatewayCard.Add(security);
-            AddMutedLabel(security, "Configure Codex writes the bearer token to this project's ignored .codex/config.toml. Copy MCP config places it on the clipboard.", 7);
+            AddMutedLabel(security, "Client setup writes the bearer token only to this project's locally ignored .codex/config.toml, .agents/mcp_config.json, or .mcp.json. Project skills contain no token. No global client config or skill is changed. Copy MCP config places the token on the clipboard.", 7);
             regenerateGatewayTokenButton = new Button(RegenerateGatewayToken) { name = "unity-mcp-gateway-regenerate-token", text = "Regenerate token", tooltip = "Creates a new local token after the gateway is stopped." };
             regenerateGatewayTokenButton.AddToClassList("unity-mcp-danger-button");
             var securityActions = new VisualElement();
@@ -911,8 +921,30 @@ namespace DucMinh.UnityMcp.Editor
                 SetGatewayFeedback(error, true);
                 return;
             }
-            SetGatewayFeedback("Codex project config updated at .codex/config.toml. UnityMCP will keep this managed server entry synchronized; restart Codex to load it.", false);
+            SetGatewayFeedback("Codex config and project skill updated at .codex/config.toml and .agents/skills/unity-mcp. UnityMCP will keep them synchronized; restart Codex if the skill is not detected automatically.", false);
             ShowNotification(new GUIContent("Codex configured for this project."));
+        }
+
+        private void ConfigureAntigravityForProject()
+        {
+            if (!UnityMcpGatewayHost.TryConfigureAntigravityForProject(out _, out var error))
+            {
+                SetGatewayFeedback(error, true);
+                return;
+            }
+            SetGatewayFeedback("Antigravity config and project skill updated at .agents/mcp_config.json and .agents/skills/unity-mcp. UnityMCP will keep them synchronized; reload MCP servers or restart Antigravity to apply them.", false);
+            ShowNotification(new GUIContent("Antigravity configured for this project."));
+        }
+
+        private void ConfigureClaudeForProject()
+        {
+            if (!UnityMcpGatewayHost.TryConfigureClaudeForProject(out _, out var error))
+            {
+                SetGatewayFeedback(error, true);
+                return;
+            }
+            SetGatewayFeedback("Claude Code config and project skill updated at .mcp.json and .claude/skills/unity-mcp. UnityMCP will keep them synchronized; restart Claude Code if needed and approve the project MCP server when prompted.", false);
+            ShowNotification(new GUIContent("Claude configured for this project."));
         }
 
         private void RegenerateGatewayToken()
@@ -956,6 +988,16 @@ namespace DucMinh.UnityMcp.Editor
             {
                 gatewayConfigureCodexButton.style.display = isRunning ? DisplayStyle.Flex : DisplayStyle.None;
                 gatewayConfigureCodexButton.SetEnabled(isRunning);
+            }
+            if (gatewayConfigureAntigravityButton != null)
+            {
+                gatewayConfigureAntigravityButton.style.display = isRunning ? DisplayStyle.Flex : DisplayStyle.None;
+                gatewayConfigureAntigravityButton.SetEnabled(isRunning);
+            }
+            if (gatewayConfigureClaudeButton != null)
+            {
+                gatewayConfigureClaudeButton.style.display = isRunning ? DisplayStyle.Flex : DisplayStyle.None;
+                gatewayConfigureClaudeButton.SetEnabled(isRunning);
             }
             if (gatewayCopyConfigButton != null)
             {

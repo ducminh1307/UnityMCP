@@ -36,18 +36,29 @@ Open **Window > UnityMCP > Tools** and use the **Editor-managed HTTP gateway** p
    remain available under **Advanced gateway settings**; `/mcp` is the normal path.
 4. The panel shows `Starting`, then `Running` only after the
    Python process has bound its endpoint.
-5. Select **Configure Codex** to create or update this project's `.codex/config.toml`.
-   UnityMCP preserves unrelated settings and keeps its marked server entry synchronized
-   when the actual port or token changes. Restart Codex after the first configuration.
-6. Use **Copy MCP config** only for another MCP client or manual setup. The clipboard
+5. Select the matching project action for your client: **Configure Codex** writes
+   `.codex/config.toml`, **Configure Antigravity** writes `.agents/mcp_config.json`, and
+   **Configure Claude** writes `.mcp.json`. Each path is relative to this Unity project;
+   UnityMCP never writes the clients' global or user-level config. Existing unrelated
+   settings are preserved and the UnityMCP entry stays synchronized when the actual port
+   or token changes. The same action installs a managed `unity-mcp` skill at
+   `.agents/skills/unity-mcp/SKILL.md` for Codex/Antigravity or
+   `.claude/skills/unity-mcp/SKILL.md` for Claude Code. Its trigger directs the client to
+   use live UnityMCP tools proactively for Unity tasks without requiring “use MCP” in the
+   prompt. Restart/reload the client after the first configuration; Claude Code also asks
+   you to approve a project-scoped MCP server.
+6. Use **Copy MCP config** only for manual setup. The clipboard
    contains the Streamable HTTP URL and bearer token. Treat that copied value as a
    password: do not commit it, log it, or share it.
 
-The project-scoped Codex configuration is supported for trusted projects. Because its
-static `Authorization` header contains the local bearer token, UnityMCP adds the exact
-`.codex/config.toml` path to the repository's local `.git/info/exclude` when the project
-is inside Git. This does not modify the shared `.gitignore`. Do not force-add the file.
-UnityMCP refuses to inject a bearer token if that config file is already tracked.
+These project-scoped configurations are supported for trusted projects. Because their
+static `Authorization` headers contain the local bearer token, UnityMCP adds the exact
+selected path to the repository's local `.git/info/exclude` when the project is inside
+Git. This does not modify the shared `.gitignore`. Do not force-add these files. UnityMCP
+refuses to inject a bearer token into a selected config file that is already tracked.
+The generated skill contains no token and is not added to Git exclude. UnityMCP only
+updates a skill bearing its managed marker and refuses to replace a user-authored
+`unity-mcp` skill at the same project path.
 
 The gateway launches only for this exact Editor descriptor and passes an explicit
 `--instance` value; it never silently selects another open Unity project. It binds only
@@ -62,7 +73,7 @@ The token is local per user/project and is kept outside `Assets` and source cont
 is passed to the child process through `UNITY_MCP_HTTP_TOKEN`, not the command line.
 The UI does not render it; it is written or copied only by an explicit configuration
 action. Select **Stop gateway** before **Regenerate token**, then start the gateway; an
-existing UnityMCP-managed Codex entry is refreshed automatically.
+existing UnityMCP-managed Codex, Antigravity, and Claude entries are refreshed automatically.
 
 Unity starts the HTTP gateway with its own process ID as `--parent-pid`. The Python
 gateway watches that parent and exits when the Editor exits. Before a domain reload,
