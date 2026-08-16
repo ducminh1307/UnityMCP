@@ -62,10 +62,11 @@ Starting a gateway creates one child Python process with `--transport
 streamable-http`, the current Editor's explicit `--instance`, and `--parent-pid` set to
 the Editor process. The HTTP server emits a readiness event only after its loopback
 socket is bound; the Editor then marks it `Running`. The parent-PID watcher makes the
-Python process exit when its originating Editor is gone. Before a domain reload Unity
-stops the process it owns, then starts a fresh child once its bridge is ready again if
-the gateway had been running. It stops the child permanently at Editor shutdown,
-including recovery from a lost managed process reference after reload.
+Python process exit when its originating Editor is gone. During a domain reload the
+gateway remains alive while the Unity bridge rebinds with the same session descriptor.
+It reports a temporary retryable reload state, reconnects automatically, and the new
+Editor domain reattaches ownership of the verified child process. The child is stopped
+permanently at Editor shutdown.
 
 Port assignment is per running gateway. If a project's preferred port is already in
 use, its launcher selects another free loopback port, so two Editors may both use the

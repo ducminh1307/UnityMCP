@@ -23,17 +23,24 @@ namespace DucMinh.UnityMcp
         private readonly UnityMcpRegistry registry;
         private readonly UnityMcpScope scope;
         private readonly CancellationTokenSource shutdown = new CancellationTokenSource();
+        private bool debugLoggingEnabled;
         private TcpListener listener;
         private Task acceptLoop;
         private string descriptorPath;
 
-        public UnityMcpHttpServer(UnityMcpRegistry registry, UnityMcpScope scope)
+        public UnityMcpHttpServer(UnityMcpRegistry registry, UnityMcpScope scope, bool debugLoggingEnabled = true)
         {
             this.registry = registry;
             this.scope = scope;
+            this.debugLoggingEnabled = debugLoggingEnabled;
         }
 
         public UnityMcpInstanceDescriptor Descriptor { get; private set; }
+        public bool DebugLoggingEnabled
+        {
+            get => debugLoggingEnabled;
+            set => debugLoggingEnabled = value;
+        }
 
         public void Start(UnityMcpInstanceDescriptor preferred = null)
         {
@@ -56,7 +63,8 @@ namespace DucMinh.UnityMcp
                 }
                 descriptorPath = UnityMcpDescriptorStore.Write(Descriptor);
                 acceptLoop = Task.Run(() => AcceptLoopAsync(shutdown.Token));
-                Debug.Log($"UnityMCP listening on loopback port {Descriptor.port} ({Descriptor.kind}, {Descriptor.instanceId}).");
+                if (debugLoggingEnabled)
+                    Debug.Log($"UnityMCP listening on loopback port {Descriptor.port} ({Descriptor.kind}, {Descriptor.instanceId}).");
             }
             catch
             {
@@ -164,7 +172,8 @@ namespace DucMinh.UnityMcp
                 { await WriteJsonAsync(stream, 400, UnityMcpResult.Error("registryRevision is required."), null, serverToken); return; }
                 var started = DateTime.UtcNow;
                 var result = await registry.InvokeAsync(name, arguments, revision, serverToken);
-                Debug.Log($"UnityMCP audit tool={name} result={(result.isError ? "error" : "ok")} durationMs={(DateTime.UtcNow - started).TotalMilliseconds:F0}");
+                if (debugLoggingEnabled)
+                    Debug.Log($"UnityMCP audit tool={name} result={(result.isError ? "error" : "ok")} durationMs={(DateTime.UtcNow - started).TotalMilliseconds:F0}");
                 await WriteJsonAsync(stream, ResultStatus(result), result, null, serverToken);
                 return;
             }

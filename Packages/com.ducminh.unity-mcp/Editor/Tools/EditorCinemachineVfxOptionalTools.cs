@@ -132,7 +132,7 @@ namespace DucMinh.UnityMcp.Editor
         public static VfxGraphSetOutput VfxGraphSet(VfxGraphSetInput input, UnityMcpContext context)
         {
             var effectType = RequireType("UnityEngine.VFX.VisualEffect");
-            var target = EditorUtility.InstanceIDToObject(input.visualEffectInstanceId);
+            var target = EditorUtility.EntityIdToObject((EntityId)input.visualEffectInstanceId);
             if (target == null || !effectType.IsInstanceOfType(target))
                 throw new ArgumentException("visualEffectInstanceId must identify a loaded VisualEffect component.");
             var component = target as Component;
@@ -301,7 +301,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private static GameObject RequireSceneGameObject(int instanceId, string inputName)
         {
-            var value = EditorUtility.InstanceIDToObject(instanceId);
+            var value = EditorUtility.EntityIdToObject((EntityId)instanceId);
             var gameObject = value as GameObject ?? (value as Component)?.gameObject;
             if (gameObject == null || !gameObject.scene.IsValid() || !gameObject.scene.isLoaded)
                 throw new ArgumentException(inputName + " must identify a GameObject or Component in a loaded scene.");

@@ -59,9 +59,9 @@ so clients must use the generated endpoint rather than guessing a port.
 
 Editor-managed HTTP processes receive `--parent-pid` for the exact Unity Editor that
 started them. The Python gateway validates that PID before starting and watches it
-thereafter; it exits when the parent is no longer live. Unity terminates the child it
-owns before a domain reload, starts a fresh child only after its bridge is ready again,
-and terminates it permanently on Editor quit. This lifecycle isolation prevents a
+thereafter; it exits when the parent is no longer live. Unity keeps the child it owns
+across a domain reload and reattaches that verified child after its bridge is ready
+again; it terminates the child permanently on Editor quit. This lifecycle isolation prevents a
 gateway from silently surviving as an unowned endpoint, but it is not a substitute for
 the bearer token or for keeping MCP connections scoped to the intended project.
 

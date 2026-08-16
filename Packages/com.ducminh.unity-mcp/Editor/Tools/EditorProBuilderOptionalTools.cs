@@ -177,7 +177,7 @@ namespace DucMinh.UnityMcp.Editor
         private static object RequireProBuilderMesh(int instanceId)
         {
             var meshType = RequireType(ProBuilderMeshTypeName);
-            var target = EditorUtility.InstanceIDToObject(instanceId);
+            var target = EditorUtility.EntityIdToObject((EntityId)instanceId);
             if (target == null || !meshType.IsInstanceOfType(target))
                 throw new ArgumentException("proBuilderMeshInstanceId must identify a loaded UnityEngine.ProBuilder.ProBuilderMesh component.");
             var component = target as Component;
@@ -257,7 +257,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private static GameObject RequireSceneGameObject(int instanceId, string parameterName)
         {
-            var target = EditorUtility.InstanceIDToObject(instanceId) as GameObject;
+            var target = EditorUtility.EntityIdToObject((EntityId)instanceId) as GameObject;
             if (target == null || !target.scene.IsValid() || !target.scene.isLoaded)
                 throw new ArgumentException(parameterName + " must identify a GameObject in a loaded scene.");
             return target;

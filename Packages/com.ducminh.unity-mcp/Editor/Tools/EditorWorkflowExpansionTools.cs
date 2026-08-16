@@ -42,9 +42,9 @@ namespace DucMinh.UnityMcp.Editor
 
     // Test discovery is intentionally dependency-free.  It identifies compiled
     // NUnit/Unity test attributes but does not depend on the optional Test Framework.
-    [Serializable] public sealed class TestListInput { public string query; public string mode = "all"; public int limit = 200; }
-    [Serializable] public sealed class TestListItem { public string fullName; public string assembly; public string mode; public bool unityTest; }
-    [Serializable] public sealed class TestListOutput { public List<TestListItem> tests = new List<TestListItem>(); public bool truncated; public string note; }
+    [Serializable] public sealed class TestListInput { public string query; public string mode = "all"; public List<string> assemblyNames = new List<string>(); public List<string> categories = new List<string>(); public List<string> excludeCategories = new List<string>(); public string @explicit = "exclude"; public int limit = 200; public string cursor; }
+    [Serializable] public sealed class TestListItem { public string id; public string fullName; public string assembly; public string mode; public bool unityTest; public List<string> categories = new List<string>(); public bool @explicit; public int? timeoutMs; public string sourceFile; public int? sourceLine; }
+    [Serializable] public sealed class TestListOutput { public List<TestListItem> tests = new List<TestListItem>(); public int total; public bool truncated; public string nextCursor; public string note; }
 
     // Package tools -----------------------------------------------------------
     [Serializable] public sealed class PackageSearchInput { public string query; public bool offlineMode; public int limit = 100; }
@@ -64,7 +64,7 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class BuildPlayerJobResult { public string outputPath; public string target; public string targetGroup; public string result; public int totalErrors; public int totalWarnings; public ulong totalSize; public double totalTimeSeconds; }
     [Serializable] public sealed class BuildTargetSwitchJobResult { public string target; public string targetGroup; public bool switched; }
     [Serializable] public sealed class BuildJobGetInput { public string jobId; }
-    [Serializable] public sealed class BuildJobGetOutput { public string jobId; public string status; public string resultJson; public string error; }
+    [Serializable] public sealed class BuildJobGetOutput { public string jobId; public string jobType; public string status; public float progress; public string progressMessage; public string createdUtc; public string startedUtc; public string completedUtc; public long durationMilliseconds; public string resultJson; public string error; }
 
     /// <summary>
     /// Editor-only workflow tools.  Every mutation remains opt-in through the
@@ -208,7 +208,7 @@ namespace DucMinh.UnityMcp.Editor
         public static WorkflowJobStartOutput CompileRequest(CompileRequestInput input, UnityMcpContext context)
         {
             if (context.DryRun) return DryRunJob("Request Unity script compilation.");
-            var job = EditorWorkflowJobRunner.Start(new CompileOperation());
+            var job = EditorWorkflowJobRunner.Start(new CompileOperation(), "compile");
             return AcceptedJob(job, "Script compilation request queued.");
         }
 
@@ -234,35 +234,27 @@ namespace DucMinh.UnityMcp.Editor
         [UnityMcpTool("test-list", Description = "List compiled methods marked with NUnit or Unity Test Framework test attributes without requiring test-runner APIs.", Category = "console-tests", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
         public static TestListOutput TestList(TestListInput input)
         {
-            var mode = (input.mode ?? "all").Trim().ToLowerInvariant();
-            if (mode != "all" && mode != "editmode" && mode != "playmode") throw new ArgumentException("mode must be all, editmode, or playmode.");
-            var query = input.query ?? string.Empty;
+            input = input ?? new TestListInput();
+            var mode = EditorTestCatalog.NormalizeMode(input.mode, true);
+            var query = (input.query ?? string.Empty).Trim();
             var limit = Math.Max(1, Math.Min(input.limit, 1000));
-            var output = new TestListOutput { note = "Discovery is attribute-based. Running tests requires the optional Unity Test Framework integration." };
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies().OrderBy(value => value.GetName().Name, StringComparer.Ordinal))
-            {
-                Type[] types;
-                try { types = assembly.GetTypes(); }
-                catch (ReflectionTypeLoadException exception) { types = exception.Types.Where(value => value != null).ToArray(); }
-                catch { continue; }
-                foreach (var type in types.OrderBy(value => value.FullName, StringComparer.Ordinal))
-                {
-                    MethodInfo[] methods;
-                    try { methods = type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly); }
-                    catch { continue; }
-                    foreach (var method in methods.OrderBy(value => value.Name, StringComparer.Ordinal))
-                    {
-                        bool unityTest;
-                        if (!HasTestAttribute(method, out unityTest)) continue;
-                        var fullName = (type.FullName ?? type.Name) + "." + method.Name;
-                        if (query.Length > 0 && fullName.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
-                        var inferredMode = InferTestMode(assembly.GetName().Name);
-                        if (mode != "all" && inferredMode != mode) continue;
-                        if (output.tests.Count >= limit) { output.truncated = true; return output; }
-                        output.tests.Add(new TestListItem { fullName = fullName, assembly = assembly.GetName().Name, mode = inferredMode, unityTest = unityTest });
-                    }
-                }
-            }
+            var assemblies = (input.assemblyNames ?? new List<string>()).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).ToList();
+            var categories = (input.categories ?? new List<string>()).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).ToList();
+            var excluded = (input.excludeCategories ?? new List<string>()).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).ToList();
+            var explicitMode = (input.@explicit ?? "exclude").Trim().ToLowerInvariant();
+            if (explicitMode != "include" && explicitMode != "exclude" && explicitMode != "only") throw new UnityMcpValidationException("TEST_FILTER_REQUIRED", "explicit must be include, exclude, or only.");
+            var all = EditorTestCatalog.Discover(mode).Where(test =>
+                (assemblies.Count == 0 || assemblies.Contains(test.assembly, StringComparer.OrdinalIgnoreCase)) &&
+                (categories.Count == 0 || test.categories.Any(category => categories.Contains(category, StringComparer.OrdinalIgnoreCase))) &&
+                !test.categories.Any(category => excluded.Contains(category, StringComparer.OrdinalIgnoreCase)) &&
+                (explicitMode != "only" || test.explicitTest) &&
+                (explicitMode != "exclude" || !test.explicitTest) &&
+                (query.Length == 0 || test.fullName.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 || test.assembly.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 || test.categories.Any(category => category.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0))).ToList();
+            var offset = 0;
+            if (!string.IsNullOrWhiteSpace(input.cursor) && (!int.TryParse(input.cursor, out offset) || offset < 0 || offset > all.Count)) throw new UnityMcpValidationException("TEST_FILTER_REQUIRED", "cursor is invalid.");
+            var page = all.Skip(offset).Take(limit).ToList();
+            var output = new TestListOutput { total = all.Count, truncated = offset + page.Count < all.Count, nextCursor = offset + page.Count < all.Count ? (offset + page.Count).ToString() : null, note = "Discovery is attribute-based; source locations are unavailable for reflected methods." };
+            output.tests = page.Select(test => new TestListItem { id = test.id, fullName = test.fullName, assembly = test.assembly, mode = test.mode, unityTest = test.unityTest, categories = test.categories, @explicit = test.explicitTest, timeoutMs = test.timeoutMs }).ToList();
             return output;
         }
 
@@ -372,7 +364,7 @@ namespace DucMinh.UnityMcp.Editor
                 : ValidateBuildScenePaths(input.scenes);
             if (scenes.Count == 0) throw new InvalidOperationException("At least one enabled build scene is required.");
             if (context.DryRun) return DryRunJob("Build " + target + " to " + ToProjectRelativePath(outputPath) + " using " + scenes.Count + " scene(s).");
-            var job = EditorWorkflowJobRunner.Start(new BuildPlayerOperation(group, target, outputPath, scenes, input.development, input.allowDebugging, input.connectProfiler));
+            var job = EditorWorkflowJobRunner.Start(new BuildPlayerOperation(group, target, outputPath, scenes, input.development, input.allowDebugging, input.connectProfiler), "build-player");
             BuildJobTracker.Register(job.jobId);
             return AcceptedJob(job, "Player build queued. The Editor will remain busy during BuildPipeline.BuildPlayer.");
         }
@@ -383,7 +375,7 @@ namespace DucMinh.UnityMcp.Editor
             if (string.IsNullOrWhiteSpace(input.jobId) || !BuildJobTracker.Contains(input.jobId)) throw new ArgumentException("Unknown build job.");
             UnityMcpJob job;
             if (!UnityMcpJobStore.Shared.TryGet(input.jobId, out job)) throw new ArgumentException("Build job is no longer available in this Unity domain.");
-            return new BuildJobGetOutput { jobId = job.jobId, status = job.status, resultJson = job.result == null ? null : JsonConvert.SerializeObject(job.result), error = job.error };
+            return new BuildJobGetOutput { jobId = job.jobId, jobType = job.jobType, status = job.status, progress = job.progress, progressMessage = job.progressMessage, createdUtc = job.createdUtc, startedUtc = job.startedUtc, completedUtc = job.completedUtc, durationMilliseconds = job.durationMilliseconds, resultJson = job.result == null ? null : JsonConvert.SerializeObject(job.result), error = job.error };
         }
 
         private static WorkflowJobStartOutput DryRunJob(string summary) => new WorkflowJobStartOutput { dryRun = true, accepted = false, status = "dry-run", summary = summary };
@@ -671,7 +663,11 @@ namespace DucMinh.UnityMcp.Editor
 
         private static string InferTestMode(string assemblyName)
         {
-            return assemblyName != null && assemblyName.IndexOf("Editor", StringComparison.OrdinalIgnoreCase) >= 0 ? "editmode" : "playmode";
+            if (string.IsNullOrWhiteSpace(assemblyName)) return "playmode";
+            return assemblyName.IndexOf("EditMode", StringComparison.OrdinalIgnoreCase) >= 0
+                || assemblyName.IndexOf("Editor", StringComparison.OrdinalIgnoreCase) >= 0
+                ? "editmode"
+                : "playmode";
         }
 
         private static WorkflowPackageInfo PackageInfoOf(UnityEditor.PackageManager.PackageInfo package)
@@ -775,27 +771,23 @@ namespace DucMinh.UnityMcp.Editor
         private static readonly Dictionary<string, IEditorWorkflowOperation> Operations = new Dictionary<string, IEditorWorkflowOperation>(StringComparer.Ordinal);
         private static bool hooked;
 
-        public static UnityMcpJobHandle Start(IEditorWorkflowOperation operation)
+        public static UnityMcpJobHandle Start(IEditorWorkflowOperation operation, string jobType = "workflow")
         {
             if (operation == null) throw new ArgumentNullException(nameof(operation));
-            var job = UnityMcpJobStore.Shared.Create();
+            var job = UnityMcpJobStore.Shared.Create(jobType);
             Operations.Add(job.jobId, operation);
             if (!hooked) { EditorApplication.update += Tick; hooked = true; }
-            return new UnityMcpJobHandle { jobId = job.jobId, status = job.status };
+            return new UnityMcpJobHandle { jobId = job.jobId, jobType = job.jobType, status = job.status, progress = job.progress, progressMessage = job.progressMessage };
         }
 
         public static void Succeed(UnityMcpJob job, object result)
         {
-            job.status = "succeeded";
-            job.error = null;
-            job.result = UnityMcpResult.Success(result);
+            UnityMcpJobStore.Shared.Complete(job, UnityMcpResult.Success(result));
         }
 
         public static void Fail(UnityMcpJob job, string error)
         {
-            job.status = "failed";
-            job.error = string.IsNullOrWhiteSpace(error) ? "The Unity Editor operation failed." : error;
-            job.result = UnityMcpResult.Error(job.error, "workflow_failed");
+            UnityMcpJobStore.Shared.Fail(job, string.IsNullOrWhiteSpace(error) ? "The Unity Editor operation failed." : error);
         }
 
         private static void Tick()
@@ -805,6 +797,7 @@ namespace DucMinh.UnityMcp.Editor
                 UnityMcpJob job;
                 if (!UnityMcpJobStore.Shared.TryGet(pair.Key, out job)) { Operations.Remove(pair.Key); continue; }
                 if (string.Equals(job.status, "cancelled", StringComparison.Ordinal) && !pair.Value.DrainWhenCancelled) { Operations.Remove(pair.Key); continue; }
+                UnityMcpJobStore.Shared.Start(job, "Running Unity Editor workflow.");
                 try
                 {
                     if (pair.Value.Tick(job)) Operations.Remove(pair.Key);

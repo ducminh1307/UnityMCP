@@ -77,7 +77,7 @@ existing UnityMCP-managed Codex, Antigravity, and Claude entries are refreshed a
 
 Unity starts the HTTP gateway with its own process ID as `--parent-pid`. The Python
 gateway watches that parent and exits when the Editor exits. Before a domain reload,
-Unity stops its owned child and, if it was running, starts a fresh child after the
+Unity keeps its owned child running and reattaches it after the
 bridge is ready again. On Editor quit it stops the child permanently, so an old gateway
 does not remain attached to a later project session.
 

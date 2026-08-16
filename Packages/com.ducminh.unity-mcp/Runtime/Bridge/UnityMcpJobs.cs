@@ -10,7 +10,14 @@ namespace DucMinh.UnityMcp
     public sealed class UnityMcpJob
     {
         public string jobId;
+        public string jobType;
         public string status;
+        public float progress;
+        public string progressMessage;
+        public string createdUtc;
+        public string startedUtc;
+        public string completedUtc;
+        public long durationMilliseconds;
         public UnityMcpResult result;
         public string error;
         internal CancellationTokenSource cancellation;
@@ -27,11 +34,41 @@ namespace DucMinh.UnityMcp
         public static UnityMcpJobStore Shared { get; } = new UnityMcpJobStore();
         private readonly ConcurrentDictionary<string, UnityMcpJob> jobs = new ConcurrentDictionary<string, UnityMcpJob>();
 
-        public UnityMcpJob Create()
+        public UnityMcpJob Create(string jobType = "operation")
         {
-            var job = new UnityMcpJob { jobId = Guid.NewGuid().ToString("N"), status = "queued", cancellation = new CancellationTokenSource() };
+            var job = new UnityMcpJob
+            {
+                jobId = Guid.NewGuid().ToString("N"), jobType = string.IsNullOrWhiteSpace(jobType) ? "operation" : jobType,
+                status = "queued", progress = 0f, createdUtc = DateTime.UtcNow.ToString("O"), cancellation = new CancellationTokenSource()
+            };
             jobs[job.jobId] = job;
             return job;
+        }
+
+        public void Start(UnityMcpJob job, string message = null)
+        {
+            if (job == null || job.status == "cancelled" || IsTerminal(job.status)) return;
+            job.status = "running";
+            if (string.IsNullOrEmpty(job.startedUtc)) job.startedUtc = DateTime.UtcNow.ToString("O");
+            if (message != null) job.progressMessage = message;
+        }
+
+        public void Report(UnityMcpJob job, float progress, string message = null)
+        {
+            Start(job);
+            if (job == null || IsTerminal(job.status)) return;
+            job.progress = Math.Max(0f, Math.Min(1f, progress));
+            if (message != null) job.progressMessage = message;
+        }
+
+        public void Complete(UnityMcpJob job, UnityMcpResult result, string message = null)
+        {
+            Finish(job, "completed", result, null, message);
+        }
+
+        public void Fail(UnityMcpJob job, string error, UnityMcpResult result = null)
+        {
+            Finish(job, "failed", result ?? UnityMcpResult.Error(error ?? "UnityMCP job failed.", "job_failed"), error, null);
         }
 
         public bool TryGet(string id, out UnityMcpJob job) => jobs.TryGetValue(id, out job);
@@ -40,9 +77,25 @@ namespace DucMinh.UnityMcp
         {
             if (!jobs.TryGetValue(id, out job)) return false;
             job.cancellation.Cancel();
-            if (job.status == "queued" || job.status == "running") job.status = "cancelled";
+            if (job.status == "queued" || job.status == "running")
+                Finish(job, "cancelled", job.result, null, "Cancellation requested.");
             return true;
         }
+
+        private static void Finish(UnityMcpJob job, string status, UnityMcpResult result, string error, string message)
+        {
+            if (job == null || IsTerminal(job.status)) return;
+            var now = DateTime.UtcNow;
+            job.status = status;
+            job.progress = status == "completed" ? 1f : job.progress;
+            job.progressMessage = message ?? job.progressMessage;
+            job.result = result;
+            job.error = error;
+            job.completedUtc = now.ToString("O");
+            if (DateTime.TryParse(job.startedUtc ?? job.createdUtc, out var started)) job.durationMilliseconds = Math.Max(0L, (long)(now - started.ToUniversalTime()).TotalMilliseconds);
+        }
+
+        private static bool IsTerminal(string status) => status == "completed" || status == "failed" || status == "cancelled";
     }
 }
 #endif

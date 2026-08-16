@@ -50,7 +50,7 @@ namespace DucMinh.UnityMcp.Editor
         {
             if (!input.instanceId.HasValue) throw new ArgumentException("instanceId is required.");
             ValidateExistingAsset(input.materialPath, ".mat");
-            var target = EditorUtility.InstanceIDToObject(input.instanceId.Value) as GameObject;
+            var target = EditorUtility.EntityIdToObject((EntityId)input.instanceId.Value) as GameObject;
             if (target == null || !target.scene.IsValid()) throw new ArgumentException("instanceId must identify a loaded scene GameObject.");
             var renderers = target.GetComponents<Renderer>();
             if (input.rendererIndex < 0 || input.rendererIndex >= renderers.Length) throw new ArgumentOutOfRangeException(nameof(input.rendererIndex));
@@ -195,7 +195,7 @@ namespace DucMinh.UnityMcp.Editor
         public static UnityMcpResult ScreenshotCamera(ScreenshotCameraInput input)
         {
             if (!input.instanceId.HasValue) throw new ArgumentException("instanceId is required.");
-            var camera = EditorUtility.InstanceIDToObject(input.instanceId.Value) as Camera;
+            var camera = EditorUtility.EntityIdToObject((EntityId)input.instanceId.Value) as Camera;
             if (camera == null || !camera.gameObject.scene.IsValid()) throw new ArgumentException("instanceId must identify a loaded Camera.");
             return CaptureCamera(camera, input.width, input.height, input.includeAlpha, out _);
         }
@@ -216,7 +216,7 @@ namespace DucMinh.UnityMcp.Editor
             var content = new List<UnityMcpContent>();
             foreach (var id in input.cameraInstanceIds.Distinct())
             {
-                var camera = EditorUtility.InstanceIDToObject(id) as Camera;
+                var camera = EditorUtility.EntityIdToObject((EntityId)id) as Camera;
                 if (camera == null || !camera.gameObject.scene.IsValid()) throw new ArgumentException("One or more cameraInstanceIds are not loaded Cameras.");
                 var result = CaptureCamera(camera, input.width, input.height, input.includeAlpha, out var info);
                 output.screenshots.Add(info);

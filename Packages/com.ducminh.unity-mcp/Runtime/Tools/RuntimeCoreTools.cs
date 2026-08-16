@@ -16,9 +16,10 @@ namespace DucMinh.UnityMcp
     [Serializable] public sealed class SetTimeScaleInput { public float timeScale = 1f; public float? fixedDeltaTime; public bool apply; }
     [Serializable] public sealed class SceneInfo { public int buildIndex; public string name; public string path; public bool isLoaded; public bool isDirty; public int rootCount; public bool isActive; }
     [Serializable] public sealed class SceneListOutput { public List<SceneInfo> scenes = new List<SceneInfo>(); }
-    [Serializable] public sealed class SceneHierarchyInput { public string scene; public int maxDepth = 12; public bool includeInactive = true; }
-    [Serializable] public sealed class GameObjectNode { public int instanceId; public string name; public string path; public bool activeSelf; public bool activeInHierarchy; public string tag; public int layer; public List<string> componentTypes = new List<string>(); public List<GameObjectNode> children = new List<GameObjectNode>(); public bool truncated; }
-    [Serializable] public sealed class SceneHierarchyOutput { public List<GameObjectNode> roots = new List<GameObjectNode>(); }
+    [Serializable] public sealed class SceneHierarchyInput { public string scene; public int maxDepth = 12; public bool includeInactive = true; public string nameContains; public string componentType; public bool includeHidden; public int rootOffset; public int rootLimit = 100; public string snapshotId; public string compareToSnapshot; }
+    [Serializable] public sealed class GameObjectNode { public int instanceId; public string name; public string path; public bool activeSelf; public bool activeInHierarchy; public string tag; public int layer; public int hideFlags; public List<string> componentTypes = new List<string>(); public List<GameObjectNode> children = new List<GameObjectNode>(); public bool truncated; }
+    [Serializable] public sealed class SceneHierarchyDiff { public int added; public int removed; public int changed; public List<string> addedPaths = new List<string>(); public List<string> removedPaths = new List<string>(); public List<string> changedPaths = new List<string>(); public bool truncated; }
+    [Serializable] public sealed class SceneHierarchyOutput { public List<GameObjectNode> roots = new List<GameObjectNode>(); public int totalRoots; public bool truncated; public string snapshotId; public SceneHierarchyDiff diff; }
     [Serializable] public sealed class GameObjectSelector { public int? instanceId; public string path; }
     [Serializable] public sealed class GameObjectFindInput { public string name; public string tag; public string scene; public bool includeInactive = true; public int limit = 100; }
     [Serializable] public sealed class GameObjectSummary { public int instanceId; public string name; public string path; public string scene; public bool activeSelf; public bool activeInHierarchy; }
@@ -45,10 +46,11 @@ namespace DucMinh.UnityMcp
     [Serializable] public sealed class ComponentRemoveInput { public int? instanceId; public string path; public string type; public int componentIndex; public bool apply; }
     [Serializable] public sealed class ComponentSetPropertyInput { public int? instanceId; public string path; public string type; public int componentIndex; public string property; public string valueJson; public bool apply; }
     [Serializable] public sealed class JobInput { public string jobId; }
-    [Serializable] public sealed class JobOutput { public string jobId; public string status; public string resultJson; public string error; }
+    [Serializable] public sealed class JobOutput { public string jobId; public string jobType; public string status; public float progress; public string progressMessage; public string createdUtc; public string startedUtc; public string completedUtc; public long durationMilliseconds; public string resultJson; public string error; }
 
     public static class RuntimeCoreTools
     {
+        private static readonly Dictionary<string, Dictionary<int, string>> HierarchySnapshots = new Dictionary<string, Dictionary<int, string>>(StringComparer.Ordinal);
         [UnityMcpTool("unity-status", Title = "Unity status", Description = "Return the connected Unity target status.", Category = "system", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.SafeRead, DefaultEnabled = true)]
         public static UnityStatusOutput UnityStatus(EmptyInput input) => new UnityStatusOutput
         {
@@ -100,12 +102,22 @@ namespace DucMinh.UnityMcp
         {
             var scene = FindScene(input.scene);
             if (!scene.IsValid() || !scene.isLoaded) throw new ArgumentException("Scene was not found or is not loaded.");
-            var output = new SceneHierarchyOutput();
+            var nodes = new List<GameObjectNode>();
             foreach (var root in scene.GetRootGameObjects())
             {
                 if (!input.includeInactive && !root.activeInHierarchy) continue;
-                output.roots.Add(ToNode(root, 0, Math.Max(0, Math.Min(input.maxDepth, 64)), input.includeInactive));
+                if (!input.includeHidden && root.hideFlags != HideFlags.None) continue;
+                var node = FilterNode(ToNode(root, 0, Math.Max(0, Math.Min(input.maxDepth, 64)), input.includeInactive), input);
+                if (node != null) nodes.Add(node);
             }
+            var output = new SceneHierarchyOutput { totalRoots = nodes.Count };
+            var offset = Math.Max(0, input.rootOffset);
+            var limit = Math.Max(1, Math.Min(input.rootLimit, 500));
+            output.roots = nodes.Skip(offset).Take(limit).ToList();
+            output.truncated = offset + output.roots.Count < nodes.Count;
+            var current = Snapshot(nodes);
+            if (!string.IsNullOrWhiteSpace(input.compareToSnapshot) && HierarchySnapshots.TryGetValue(input.compareToSnapshot, out var prior)) output.diff = Diff(prior, current);
+            if (!string.IsNullOrWhiteSpace(input.snapshotId)) { HierarchySnapshots[input.snapshotId] = current; output.snapshotId = input.snapshotId; }
             return output;
         }
 
@@ -272,15 +284,21 @@ namespace DucMinh.UnityMcp
         public static JobOutput JobGet(JobInput input)
         {
             if (!UnityMcpJobStore.Shared.TryGet(input.jobId, out var job)) throw new ArgumentException("Unknown job.");
-            return new JobOutput { jobId = job.jobId, status = job.status, resultJson = job.result == null ? null : JsonConvert.SerializeObject(job.result), error = job.error };
+            return ToJobOutput(job);
         }
 
         [UnityMcpTool("job-cancel", Description = "Cancel one cancellable UnityMCP job.", Category = "automation", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write)]
         public static JobOutput JobCancel(JobInput input)
         {
             if (!UnityMcpJobStore.Shared.Cancel(input.jobId, out var job)) throw new ArgumentException("Unknown job.");
-            return new JobOutput { jobId = job.jobId, status = job.status, resultJson = job.result == null ? null : JsonConvert.SerializeObject(job.result), error = job.error };
+            return ToJobOutput(job);
         }
+        private static JobOutput ToJobOutput(UnityMcpJob job) => new JobOutput
+        {
+            jobId = job.jobId, jobType = job.jobType, status = job.status, progress = job.progress, progressMessage = job.progressMessage,
+            createdUtc = job.createdUtc, startedUtc = job.startedUtc, completedUtc = job.completedUtc, durationMilliseconds = job.durationMilliseconds,
+            resultJson = job.result == null ? null : JsonConvert.SerializeObject(job.result), error = job.error
+        };
 #endif
 
         [UnityMcpTool("screenshot-game-view", Description = "Capture the Development Player framebuffer as PNG.", Category = "visual", Scope = UnityMcpScope.Runtime, Safety = UnityMcpSafety.SafeRead)]
@@ -395,7 +413,7 @@ namespace DucMinh.UnityMcp
             var node = new GameObjectNode
             {
                 instanceId = gameObject.GetInstanceID(), name = gameObject.name, path = HierarchyPath(gameObject), activeSelf = gameObject.activeSelf,
-                activeInHierarchy = gameObject.activeInHierarchy, tag = gameObject.tag, layer = gameObject.layer,
+                activeInHierarchy = gameObject.activeInHierarchy, tag = gameObject.tag, layer = gameObject.layer, hideFlags = (int)gameObject.hideFlags,
                 componentTypes = gameObject.GetComponents<Component>().Where(c => c != null).Select(c => c.GetType().FullName).ToList()
             };
             if (depth >= maxDepth) { node.truncated = gameObject.transform.childCount > 0; return node; }
@@ -405,6 +423,47 @@ namespace DucMinh.UnityMcp
                 if (includeInactive || child.activeInHierarchy) node.children.Add(ToNode(child, depth + 1, maxDepth, includeInactive));
             }
             return node;
+        }
+
+        private static GameObjectNode FilterNode(GameObjectNode node, SceneHierarchyInput input)
+        {
+            if (!input.includeHidden && node.hideFlags != 0) return null;
+            node.children = node.children.Select(child => FilterNode(child, input)).Where(child => child != null).ToList();
+            var matchesName = string.IsNullOrWhiteSpace(input.nameContains) || node.name.IndexOf(input.nameContains, StringComparison.OrdinalIgnoreCase) >= 0;
+            var matchesComponent = string.IsNullOrWhiteSpace(input.componentType) || node.componentTypes.Any(type => string.Equals(type, input.componentType, StringComparison.Ordinal) || type.EndsWith("." + input.componentType, StringComparison.Ordinal));
+            return matchesName && matchesComponent || node.children.Count > 0 ? node : null;
+        }
+
+        private static Dictionary<int, string> Snapshot(IEnumerable<GameObjectNode> roots)
+        {
+            var values = new Dictionary<int, string>();
+            foreach (var root in roots) AddSnapshot(root, values);
+            return values;
+        }
+
+        private static void AddSnapshot(GameObjectNode node, Dictionary<int, string> values)
+        {
+            values[node.instanceId] = node.path + "|" + node.activeSelf + "|" + node.activeInHierarchy + "|" + node.tag + "|" + node.layer + "|" + string.Join(",", node.componentTypes.OrderBy(value => value, StringComparer.Ordinal));
+            foreach (var child in node.children) AddSnapshot(child, values);
+        }
+
+        private static SceneHierarchyDiff Diff(Dictionary<int, string> previous, Dictionary<int, string> current)
+        {
+            var output = new SceneHierarchyDiff();
+            foreach (var pair in current.OrderBy(value => value.Value, StringComparer.Ordinal))
+            {
+                if (!previous.TryGetValue(pair.Key, out var oldValue)) AddDiffPath(output.addedPaths, pair.Value, ref output.added, output);
+                else if (!string.Equals(oldValue, pair.Value, StringComparison.Ordinal)) AddDiffPath(output.changedPaths, pair.Value, ref output.changed, output);
+            }
+            foreach (var pair in previous.OrderBy(value => value.Value, StringComparer.Ordinal))
+                if (!current.ContainsKey(pair.Key)) AddDiffPath(output.removedPaths, pair.Value, ref output.removed, output);
+            return output;
+        }
+
+        private static void AddDiffPath(List<string> paths, string value, ref int count, SceneHierarchyDiff output)
+        {
+            count++;
+            if (paths.Count < 200) paths.Add(value); else output.truncated = true;
         }
     }
 }

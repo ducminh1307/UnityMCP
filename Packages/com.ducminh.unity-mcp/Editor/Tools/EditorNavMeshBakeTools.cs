@@ -57,7 +57,7 @@ namespace DucMinh.UnityMcp.Editor
         {
             var requiredType = FindType("Unity.AI.Navigation.NavMeshSurface")
                 ?? throw new InvalidOperationException("The AI Navigation package is not available.");
-            var target = EditorUtility.InstanceIDToObject(instanceId) as Component;
+            var target = EditorUtility.EntityIdToObject((EntityId)instanceId) as Component;
             if (target == null || !requiredType.IsInstanceOfType(target))
                 throw new ArgumentException("surfaceInstanceId must identify a loaded Unity.AI.Navigation.NavMeshSurface component.");
             buildMethod = requiredType.GetMethod("BuildNavMesh", BindingFlags.Instance | BindingFlags.Public, null, Type.EmptyTypes, null);

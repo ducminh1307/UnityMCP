@@ -14,9 +14,9 @@ namespace DucMinh.UnityMcp.Editor
 {
     [Serializable] public sealed class EditorPauseInput { public bool paused; public bool apply; }
     [Serializable] public sealed class SceneCloseInput { public string scene; public bool saveDirtyScene; public bool discardDirtyChanges; public bool apply; }
-    [Serializable] public sealed class SceneValidationInput { public string scene; public bool includeInactive = true; public int maxIssues = 100; }
+    [Serializable] public sealed class SceneValidationInput { public string scene; public bool includeInactive = true; public int maxIssues = 100; public string profile = "references"; }
     [Serializable] public sealed class SceneValidationIssue { public string kind; public string message; public int instanceId; public string hierarchyPath; public int componentIndex = -1; public string propertyPath; }
-    [Serializable] public sealed class SceneValidationOutput { public string scene; public int objectsScanned; public int componentsScanned; public List<SceneValidationIssue> issues = new List<SceneValidationIssue>(); public bool truncated; }
+    [Serializable] public sealed class SceneValidationOutput { public string scene; public string profile; public int objectsScanned; public int componentsScanned; public List<SceneValidationIssue> issues = new List<SceneValidationIssue>(); public bool truncated; }
     [Serializable] public sealed class AssetImportInput { public string path; public bool forceUpdate = true; public bool apply; }
     [Serializable] public sealed class AssetImportOutput { public bool dryRun; public bool imported; public string path; public string guid; public string importerType; public string assetType; public List<ChangeJournalEntry> journal = new List<ChangeJournalEntry>(); }
     [Serializable] public sealed class AssetCopyInput { public string source; public string destination; public bool apply; }
@@ -107,18 +107,30 @@ namespace DucMinh.UnityMcp.Editor
             return Change(context, "Close loaded scene '" + scene.name + "'.");
         }
 
-        [UnityMcpTool("scene-validate", Description = "Find missing scripts and broken serialized object references in one loaded scene.", Category = "scene", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
+        [UnityMcpTool("scene-validate", Description = "Validate references and optional lifecycle hazards in one loaded scene.", Category = "scene", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
         public static SceneValidationOutput SceneValidate(SceneValidationInput input)
         {
             var scene = RequireLoadedScene(input.scene, false);
             var limit = Math.Max(1, Math.Min(input.maxIssues, 1000));
-            var output = new SceneValidationOutput { scene = string.IsNullOrEmpty(scene.path) ? scene.name : scene.path };
+            var profile = (input.profile ?? "references").Trim().ToLowerInvariant();
+            if (profile != "references" && profile != "lifecycle" && profile != "all") throw new ArgumentException("profile must be references, lifecycle, or all.");
+            var includeReferences = profile == "references" || profile == "all";
+            var includeLifecycle = profile == "lifecycle" || profile == "all";
+            var output = new SceneValidationOutput { scene = string.IsNullOrEmpty(scene.path) ? scene.name : scene.path, profile = profile };
+            var rootNames = includeLifecycle ? new HashSet<string>(StringComparer.Ordinal) : null;
             foreach (var root in scene.GetRootGameObjects())
             {
+                if (includeLifecycle && !rootNames.Add(root.name))
+                    AddIssue(output, limit, new SceneValidationIssue { kind = "duplicate-root-name", message = "Multiple root GameObjects share this name; verify duplicate bootstrap objects are intentional.", instanceId = root.GetInstanceID(), hierarchyPath = HierarchyPath(root) });
                 foreach (var gameObject in Traverse(root))
                 {
                     if (!input.includeInactive && !gameObject.activeInHierarchy) continue;
                     output.objectsScanned++;
+                    if (includeLifecycle && (gameObject.hideFlags & HideFlags.DontSave) != 0)
+                    {
+                        AddIssue(output, limit, new SceneValidationIssue { kind = "dont-save-object", message = "GameObject has DontSave hide flags and can survive lifecycle transitions unexpectedly.", instanceId = gameObject.GetInstanceID(), hierarchyPath = HierarchyPath(gameObject) });
+                        if (output.truncated) return output;
+                    }
                     var components = gameObject.GetComponents<Component>();
                     for (var componentIndex = 0; componentIndex < components.Length; componentIndex++)
                     {
@@ -138,6 +150,7 @@ namespace DucMinh.UnityMcp.Editor
                         }
 
                         output.componentsScanned++;
+                        if (!includeReferences) continue;
                         try
                         {
                             var serialized = new SerializedObject(component);

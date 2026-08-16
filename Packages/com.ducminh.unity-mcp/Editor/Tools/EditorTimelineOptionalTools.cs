@@ -310,7 +310,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private static GameObject RequireSceneGameObject(int instanceId, string inputName)
         {
-            var value = EditorUtility.InstanceIDToObject(instanceId);
+            var value = EditorUtility.EntityIdToObject((EntityId)instanceId);
             var gameObject = value as GameObject ?? (value as Component)?.gameObject;
             if (gameObject == null || !gameObject.scene.IsValid() || !gameObject.scene.isLoaded)
                 throw new ArgumentException(inputName + " must identify a GameObject or Component in a loaded scene.");
@@ -319,7 +319,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private static UnityEngine.Object RequireSceneObject(int instanceId, string inputName)
         {
-            var value = EditorUtility.InstanceIDToObject(instanceId);
+            var value = EditorUtility.EntityIdToObject((EntityId)instanceId);
             var gameObject = value as GameObject ?? (value as Component)?.gameObject;
             if (value == null || gameObject == null || !gameObject.scene.IsValid() || !gameObject.scene.isLoaded)
                 throw new ArgumentException(inputName + " must identify a GameObject or Component in a loaded scene.");

@@ -440,7 +440,7 @@ namespace DucMinh.UnityMcp.Editor
             UnityEngine.Object target;
             if (instanceId.HasValue)
             {
-                target = EditorUtility.InstanceIDToObject(instanceId.Value);
+                target = EditorUtility.EntityIdToObject((EntityId)instanceId.Value);
                 if (target == null) throw new ArgumentException("instanceId does not identify a live Unity object.");
             }
             else

@@ -75,6 +75,19 @@ namespace DucMinh.UnityMcp
         };
     }
 
+    /// <summary>Expected caller validation failures that should be returned without logging a Unity Console error.</summary>
+    public class UnityMcpValidationException : Exception
+    {
+        public string ErrorCode { get; }
+        public object StructuredContent { get; }
+
+        public UnityMcpValidationException(string errorCode, string message, object structuredContent = null) : base(message)
+        {
+            ErrorCode = errorCode;
+            StructuredContent = structuredContent;
+        }
+    }
+
     [Serializable]
     public sealed class UnityMcpResult<T>
     {
@@ -90,7 +103,10 @@ namespace DucMinh.UnityMcp
     public sealed class UnityMcpJobHandle
     {
         public string jobId;
+        public string jobType;
         public string status;
+        public float progress;
+        public string progressMessage;
     }
 
     [Serializable]

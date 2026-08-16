@@ -40,6 +40,11 @@ namespace DucMinh.UnityMcp.Editor
         internal static UnityMcpRegistry Registry { get; private set; }
         internal static UnityMcpInstanceDescriptor Descriptor => server == null ? null : server.Descriptor;
 
+        internal static void SetDebugLoggingEnabled(bool enabled)
+        {
+            if (server != null) server.DebugLoggingEnabled = enabled;
+        }
+
         static UnityMcpEditorBootstrap()
         {
             AssemblyReloadEvents.beforeAssemblyReload += Stop;
@@ -55,7 +60,8 @@ namespace DucMinh.UnityMcp.Editor
             UnityMcpRegistry.DiscoveryOverride = () => TypeCache.GetMethodsWithAttribute<UnityMcpToolAttribute>().Cast<MethodInfo>();
             Registry = new UnityMcpRegistry(UnityMcpScope.Editor, new EditorEnablementStore());
             Registry.Reload();
-            server = new UnityMcpHttpServer(Registry, UnityMcpScope.Editor);
+            var debugLoggingEnabled = UnityMcpGatewayHost.GetSettings().DebugLoggingEnabled;
+            server = new UnityMcpHttpServer(Registry, UnityMcpScope.Editor, debugLoggingEnabled);
             UnityMcpInstanceDescriptor preferred = null;
             var stored = SessionState.GetString(SessionDescriptorKey, string.Empty);
             if (!string.IsNullOrEmpty(stored))
@@ -63,7 +69,7 @@ namespace DucMinh.UnityMcp.Editor
                 try { preferred = JsonConvert.DeserializeObject<UnityMcpInstanceDescriptor>(stored); } catch { }
             }
             try { server.Start(preferred); }
-            catch when (preferred != null) { server.Dispose(); server = new UnityMcpHttpServer(Registry, UnityMcpScope.Editor); server.Start(); }
+            catch when (preferred != null) { server.Dispose(); server = new UnityMcpHttpServer(Registry, UnityMcpScope.Editor, debugLoggingEnabled); server.Start(); }
             SessionState.SetString(SessionDescriptorKey, JsonConvert.SerializeObject(server.Descriptor));
         }
 
@@ -130,6 +136,7 @@ namespace DucMinh.UnityMcp.Editor
         private TextField executablePathField;
         private IntegerField portField;
         private TextField mcpPathField;
+        private Toggle debugLoggingToggle;
         private Button saveGatewaySettingsButton;
         private Button regenerateGatewayTokenButton;
 
@@ -409,6 +416,12 @@ namespace DucMinh.UnityMcp.Editor
             mcpPathField = new TextField { name = "unity-mcp-gateway-path", isDelayed = true, tooltip = "The local Streamable HTTP path; /mcp is recommended." };
             advanced.Add(CreateFormRow("Preferred port", portField));
             advanced.Add(CreateFormRow("MCP path", mcpPathField));
+            debugLoggingToggle = new Toggle("Debug logging")
+            {
+                name = "unity-mcp-debug-logging",
+                tooltip = "Write UnityMCP startup and tool-call audit messages to the Unity Console. Warnings and errors are always logged."
+            };
+            advanced.Add(CreateFormRow("Logging", debugLoggingToggle));
 
             var settingsActions = new VisualElement();
             settingsActions.AddToClassList("unity-mcp-action-row");
@@ -421,6 +434,7 @@ namespace DucMinh.UnityMcp.Editor
             executablePathField.RegisterValueChangedCallback(_ => MarkGatewaySettingsDirty());
             portField.RegisterValueChangedCallback(_ => MarkGatewaySettingsDirty());
             mcpPathField.RegisterValueChangedCallback(_ => MarkGatewaySettingsDirty());
+            debugLoggingToggle.RegisterValueChangedCallback(_ => MarkGatewaySettingsDirty());
 
             var security = new Foldout { name = "unity-mcp-gateway-security", text = "Security", value = false };
             gatewayCard.Add(security);
@@ -664,15 +678,16 @@ namespace DucMinh.UnityMcp.Editor
             return UnityMcpEditorBootstrap.Registry?.Tools.Where(MatchesActiveToolFilter) ?? Enumerable.Empty<UnityMcpToolDescriptor>();
         }
 
-        private void ApplyBulkToolEnablement(IEnumerable<UnityMcpToolDescriptor> tools, bool enabled, string selectionLabel)
+        private bool ApplyBulkToolEnablement(IEnumerable<UnityMcpToolDescriptor> tools, bool enabled, string selectionLabel)
         {
             var registry = UnityMcpEditorBootstrap.Registry;
-            if (registry == null) return;
+            if (registry == null) return false;
             var targets = (tools ?? Enumerable.Empty<UnityMcpToolDescriptor>()).Where(tool => tool.enabled != enabled).ToList();
-            if (targets.Count == 0) return;
-            if (enabled && !ConfirmBulkToolEnablement(targets, selectionLabel)) return;
+            if (targets.Count == 0) return true;
+            if (enabled && !ConfirmBulkToolEnablement(targets, selectionLabel)) return false;
             registry.SetEnabled(targets.Select(tool => tool.name), enabled);
             ShowNotification(new GUIContent((enabled ? "Enabled " : "Disabled ") + targets.Count + " tools."));
+            return true;
         }
 
         private static bool ConfirmBulkToolEnablement(IReadOnlyCollection<UnityMcpToolDescriptor> tools, string selectionLabel)
@@ -702,21 +717,20 @@ namespace DucMinh.UnityMcp.Editor
             if (groupHeader != null)
             {
                 groupHeader.AddToClassList("unity-mcp-tool-group__header");
-                var groupActions = new VisualElement();
-                groupActions.AddToClassList("unity-mcp-tool-group__actions");
-                var disabledCount = tools.Count(tool => !tool.enabled);
                 var enabledCount = tools.Count(tool => tool.enabled);
-                var enableButton = new Button(() => ApplyBulkToolEnablement(tools, true, FormatCategory(category))) { text = "Enable (" + disabledCount + ")", tooltip = "Enable the currently shown tools in this category." };
-                enableButton.AddToClassList("unity-mcp-tool-group__action");
-                enableButton.SetEnabled(disabledCount > 0);
-                enableButton.RegisterCallback<ClickEvent>(click => click.StopPropagation());
-                var disableButton = new Button(() => ApplyBulkToolEnablement(tools, false, FormatCategory(category))) { text = "Disable (" + enabledCount + ")", tooltip = "Disable the currently shown tools in this category." };
-                disableButton.AddToClassList("unity-mcp-tool-group__action");
-                disableButton.SetEnabled(enabledCount > 0);
-                disableButton.RegisterCallback<ClickEvent>(click => click.StopPropagation());
-                groupActions.Add(enableButton);
-                groupActions.Add(disableButton);
-                groupHeader.Add(groupActions);
+                var groupEnablement = new Toggle("All enabled")
+                {
+                    value = enabledCount == tools.Count,
+                    tooltip = "Enable or disable every currently shown tool in this category."
+                };
+                groupEnablement.AddToClassList("unity-mcp-tool-group__enablement");
+                groupEnablement.RegisterCallback<ClickEvent>(click => click.StopPropagation());
+                groupEnablement.RegisterValueChangedCallback(change =>
+                {
+                    if (!ApplyBulkToolEnablement(tools, change.newValue, FormatCategory(category)))
+                        groupEnablement.SetValueWithoutNotify(enabledCount == tools.Count);
+                });
+                groupHeader.Add(groupEnablement);
             }
             group.RegisterValueChangedCallback(change => SessionState.SetBool(categoryStateKey, change.newValue));
             foreach (var tool in tools) group.Add(CreateToolRow(UnityMcpEditorBootstrap.Registry, tool));
@@ -811,6 +825,7 @@ namespace DucMinh.UnityMcp.Editor
             executablePathField?.SetValueWithoutNotify(settings.ExecutablePath);
             portField?.SetValueWithoutNotify(settings.PreferredPort);
             mcpPathField?.SetValueWithoutNotify(settings.McpPath);
+            debugLoggingToggle?.SetValueWithoutNotify(settings.DebugLoggingEnabled);
             gatewaySettingsDirty = false;
             RefreshGatewaySettingsButton();
         }
@@ -832,13 +847,15 @@ namespace DucMinh.UnityMcp.Editor
             {
                 ExecutablePath = executablePathField?.value,
                 PreferredPort = portField?.value ?? 0,
-                McpPath = mcpPathField?.value
+                McpPath = mcpPathField?.value,
+                DebugLoggingEnabled = debugLoggingToggle?.value ?? true
             };
             if (!UnityMcpGatewayHost.TrySaveSettings(settings, out var error))
             {
                 SetGatewayFeedback(error, true);
                 return false;
             }
+            UnityMcpEditorBootstrap.SetDebugLoggingEnabled(settings.DebugLoggingEnabled);
             gatewaySettingsDirty = false;
             RefreshGatewaySettingsButton();
             SetGatewayFeedback("Gateway settings saved locally.", false);

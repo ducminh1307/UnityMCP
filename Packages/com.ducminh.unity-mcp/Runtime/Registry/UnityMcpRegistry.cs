@@ -211,6 +211,14 @@ namespace DucMinh.UnityMcp
                 catch (TargetInvocationException exception)
                 {
                     var failure = exception.InnerException ?? exception;
+                    if (failure is UnityMcpValidationException validation)
+                    {
+                        var result = UnityMcpResult.Error(validation.Message, validation.ErrorCode);
+                        result.structuredContent = validation.StructuredContent;
+                        return result;
+                    }
+                    if (failure is ArgumentException)
+                        return UnityMcpResult.Error(failure.Message, "invalid_arguments");
                     Debug.LogWarning($"UnityMCP tool '{name}' failed ({failure.GetType().Name}); details were redacted.");
                     return UnityMcpResult.Error("Unity tool execution failed. See the local Unity Console for details.", "execution_failed");
                 }

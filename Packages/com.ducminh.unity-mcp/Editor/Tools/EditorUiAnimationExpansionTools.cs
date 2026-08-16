@@ -339,7 +339,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private static GameObject RequireSceneGameObject(int instanceId)
         {
-            var value = EditorUtility.InstanceIDToObject(instanceId);
+            var value = EditorUtility.EntityIdToObject((EntityId)instanceId);
             var gameObject = value as GameObject ?? (value as Component)?.gameObject;
             if (gameObject == null || !gameObject.scene.IsValid() || !gameObject.scene.isLoaded) throw new ArgumentException("A loaded scene GameObject was not found for instanceId.");
             return gameObject;
@@ -387,7 +387,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private static int SiblingIndex(int instanceId)
         {
-            var gameObject = EditorUtility.InstanceIDToObject(instanceId) as GameObject;
+            var gameObject = EditorUtility.EntityIdToObject((EntityId)instanceId) as GameObject;
             return gameObject == null ? 0 : gameObject.transform.GetSiblingIndex();
         }
 

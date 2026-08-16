@@ -10,6 +10,7 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Profiling;
+using Unity.Profiling;
 using UnityEngine.SceneManagement;
 
 namespace DucMinh.UnityMcp.Editor
@@ -70,12 +71,19 @@ namespace DucMinh.UnityMcp.Editor
 
     [Serializable] public sealed class ProfilerCounter { public string name; public long value; public string unit = "bytes"; }
     [Serializable] public sealed class ProfilerCountersOutput { public int frame; public bool profilerEnabled; public List<ProfilerCounter> counters = new List<ProfilerCounter>(); }
+    [Serializable] public sealed class ProfilerFrameCaptureInput { public int sampleFrames = 60; }
     [Serializable] public sealed class ProfilerFrameCaptureOutput
     {
         public string captureKind;
         public int frame;
         public double editorTimeSinceStartup;
         public bool profilerEnabled;
+        public int sampledFrames;
+        public double mainThreadMilliseconds;
+        public long gcAllocatedBytes;
+        public double frameTimeP50Milliseconds;
+        public double frameTimeP95Milliseconds;
+        public double frameTimeP99Milliseconds;
         public List<ProfilerCounter> counters = new List<ProfilerCounter>();
     }
 
@@ -124,6 +132,11 @@ namespace DucMinh.UnityMcp.Editor
     /// </summary>
     public static class EditorRemainingCoreTools
     {
+        private sealed class PerformanceSample { public double mainThreadMilliseconds; public long gcAllocatedBytes; }
+        private static readonly Queue<PerformanceSample> PerformanceSamples = new Queue<PerformanceSample>();
+        private static ProfilerRecorder mainThreadRecorder;
+        private static ProfilerRecorder gcAllocatedRecorder;
+        private static bool performanceSamplerHooked;
         private const int MaxAssetReferenceScan = 20000;
         private const int MaxShaderBytes = 512 * 1024;
         private const int MaxStructuredScriptBytes = 512 * 1024;
@@ -249,7 +262,7 @@ namespace DucMinh.UnityMcp.Editor
         [UnityMcpTool("screenshot-gameobject", Description = "Capture Unity's generated preview image for a GameObject or Component as PNG.", Category = "visual", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
         public static UnityMcpResult ScreenshotGameObject(ScreenshotGameObjectInput input)
         {
-            var target = EditorUtility.InstanceIDToObject(input.instanceId);
+            var target = EditorUtility.EntityIdToObject((EntityId)input.instanceId);
             var gameObject = target as GameObject ?? (target as Component)?.gameObject;
             if (gameObject == null) throw new ArgumentException("instanceId must identify a GameObject or Component.");
             var width = Mathf.Clamp(input.width, 16, 2048);
@@ -289,15 +302,29 @@ namespace DucMinh.UnityMcp.Editor
             counters = ReadProfilerCounters()
         };
 
-        [UnityMcpTool("profiler-frame-capture", Description = "Capture a point-in-time current-frame memory counter sample; this is not a full raw Profiler capture.", Category = "diagnostic", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
-        public static ProfilerFrameCaptureOutput ProfilerFrameCapture(EmptyInput input) => new ProfilerFrameCaptureOutput
+        [UnityMcpTool("profiler-frame-capture", Description = "Summarize a bounded recent Editor-frame sample window with main-thread, GC, and frame-time percentiles.", Category = "diagnostic", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
+        public static ProfilerFrameCaptureOutput ProfilerFrameCapture(ProfilerFrameCaptureInput input)
         {
-            captureKind = "current-frame-memory-counters",
-            frame = Time.frameCount,
-            editorTimeSinceStartup = EditorApplication.timeSinceStartup,
-            profilerEnabled = Profiler.enabled,
-            counters = ReadProfilerCounters()
-        };
+            EnsurePerformanceSampler();
+            var requested = Mathf.Clamp(input == null ? 60 : input.sampleFrames, 1, 300);
+            var samples = PerformanceSamples.Reverse().Take(requested).Reverse().ToList();
+            var times = samples.Select(sample => sample.mainThreadMilliseconds).OrderBy(value => value).ToList();
+            var latest = samples.Count == 0 ? null : samples[samples.Count - 1];
+            return new ProfilerFrameCaptureOutput
+            {
+                captureKind = "editor-frame-window",
+                frame = Time.frameCount,
+                editorTimeSinceStartup = EditorApplication.timeSinceStartup,
+                profilerEnabled = Profiler.enabled,
+                sampledFrames = samples.Count,
+                mainThreadMilliseconds = latest == null ? 0d : latest.mainThreadMilliseconds,
+                gcAllocatedBytes = latest == null ? 0L : latest.gcAllocatedBytes,
+                frameTimeP50Milliseconds = Percentile(times, 0.50d),
+                frameTimeP95Milliseconds = Percentile(times, 0.95d),
+                frameTimeP99Milliseconds = Percentile(times, 0.99d),
+                counters = ReadProfilerCounters()
+            };
+        }
 
         [UnityMcpTool("frame-debugger-events", Description = "Read currently available Unity Frame Debugger events without enabling or changing the debugger.", Category = "diagnostic", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
         public static FrameDebuggerEventsOutput FrameDebuggerEvents(FrameDebuggerEventsInput input)
@@ -451,6 +478,31 @@ namespace DucMinh.UnityMcp.Editor
             if (input.indirectSampleCount.HasValue) settings.indirectSampleCount = input.indirectSampleCount.Value;
             if (input.environmentSampleCount.HasValue) settings.environmentSampleCount = input.environmentSampleCount.Value;
             if (input.indirectScale.HasValue) settings.indirectScale = input.indirectScale.Value;
+        }
+
+        private static void EnsurePerformanceSampler()
+        {
+            if (performanceSamplerHooked) return;
+            mainThreadRecorder = ProfilerRecorder.StartNew(ProfilerCategory.Internal, "Main Thread", 300);
+            gcAllocatedRecorder = ProfilerRecorder.StartNew(ProfilerCategory.Memory, "GC Allocated In Frame", 300);
+            EditorApplication.update += SamplePerformance;
+            performanceSamplerHooked = true;
+        }
+
+        private static void SamplePerformance()
+        {
+            if (!performanceSamplerHooked) return;
+            var mainThreadNanoseconds = mainThreadRecorder.Valid ? mainThreadRecorder.LastValue : 0L;
+            var gcAllocatedBytes = gcAllocatedRecorder.Valid ? gcAllocatedRecorder.LastValue : 0L;
+            PerformanceSamples.Enqueue(new PerformanceSample { mainThreadMilliseconds = mainThreadNanoseconds / 1000000d, gcAllocatedBytes = gcAllocatedBytes });
+            while (PerformanceSamples.Count > 300) PerformanceSamples.Dequeue();
+        }
+
+        private static double Percentile(List<double> values, double percentile)
+        {
+            if (values == null || values.Count == 0) return 0d;
+            var index = (int)Math.Ceiling(values.Count * percentile) - 1;
+            return values[Math.Max(0, Math.Min(values.Count - 1, index))];
         }
 
         private static List<ProfilerCounter> ReadProfilerCounters() => new List<ProfilerCounter>

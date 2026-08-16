@@ -20,6 +20,7 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class EditorSelectionOutput { public int? activeInstanceId; public List<SelectionItem> objects = new List<SelectionItem>(); }
     [Serializable] public sealed class EditorSelectionSetInput { public List<int> instanceIds = new List<int>(); public int? activeInstanceId; public bool apply; }
     [Serializable] public sealed class EditorActionInput { public bool apply; }
+    [Serializable] public sealed class PlayModeSessionOutput { public bool isPlaying; public bool isPaused; public bool isCompiling; public bool isUpdating; public int stableEditorFrames; }
     [Serializable] public sealed class SceneCreateInput { public string path; public bool withDefaultGameObjects; public bool additive; public bool apply; }
     [Serializable] public sealed class SceneOpenInput { public string path; public bool additive; public bool apply; }
     [Serializable] public sealed class SceneSaveInput { public string scene; public string path; public bool apply; }
@@ -38,9 +39,9 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class MaterialPropertyInfo { public string name; public string description; public string type; }
     [Serializable] public sealed class MaterialSetPropertyInput { public string path; public string property; public string valueJson; public bool apply; }
     [Serializable] public sealed class CompileStatusOutput { public bool isCompiling; public bool isUpdating; public string[] assemblies; }
-    [Serializable] public sealed class ConsoleReadInput { public int limit = 100; public string severity; public string contains; }
-    [Serializable] public sealed class ConsoleEntryInfo { public string message; public string stackTrace; public string file; public int line; public string severity; }
-    [Serializable] public sealed class ConsoleReadOutput { public List<ConsoleEntryInfo> entries = new List<ConsoleEntryInfo>(); public bool truncated; }
+    [Serializable] public sealed class ConsoleReadInput { public int limit = 100; public string severity; public string contains; public long afterCursor = -1; }
+    [Serializable] public sealed class ConsoleEntryInfo { public long cursor; public string observedUtc; public string message; public string stackTrace; public string file; public int line; public string severity; }
+    [Serializable] public sealed class ConsoleReadOutput { public List<ConsoleEntryInfo> entries = new List<ConsoleEntryInfo>(); public long firstCursor = -1; public long lastCursor = -1; public long nextCursor = -1; public bool cursorReset; public bool truncated; }
     [Serializable] public sealed class CompileErrorsOutput { public List<ConsoleEntryInfo> errors = new List<ConsoleEntryInfo>(); }
     [Serializable] public sealed class PackageInfoOutput { public string name; public string displayName; public string version; public string source; public string resolvedPath; }
     [Serializable] public sealed class PackageListOutput { public List<PackageInfoOutput> packages = new List<PackageInfoOutput>(); }
@@ -72,29 +73,31 @@ namespace DucMinh.UnityMcp.Editor
             return output;
         }
 
-        [UnityMcpTool("editor-play", Description = "Enter Play Mode; dry-run unless apply is true.", Category = "editor", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
-        public static ChangeOutput EditorPlay(EditorActionInput input, UnityMcpContext context)
+        [UnityMcpTool("editor-play", Description = "Enter Play Mode and return a job that completes after the Editor is stable; dry-run unless apply is true.", Category = "editor", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, ReturnsJob = true, TimeoutMs = 120000)]
+        public static WorkflowJobStartOutput EditorPlay(EditorActionInput input, UnityMcpContext context)
         {
-            if (!context.DryRun) EditorApplication.isPlaying = true;
-            return Change(context, "Enter Play Mode.");
+            if (context.DryRun) return new WorkflowJobStartOutput { dryRun = true, summary = "Enter Play Mode and wait for a stable Editor state." };
+            var job = EditorWorkflowJobRunner.Start(new EditorPlayModeOperation(true), "play-mode");
+            return new WorkflowJobStartOutput { accepted = true, jobId = job.jobId, status = job.status, summary = "Play Mode transition queued." };
         }
 
-        [UnityMcpTool("editor-stop", Description = "Exit Play Mode; dry-run unless apply is true.", Category = "editor", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
-        public static ChangeOutput EditorStop(EditorActionInput input, UnityMcpContext context)
+        [UnityMcpTool("editor-stop", Description = "Exit Play Mode and return a job that completes after the Editor is stable; dry-run unless apply is true.", Category = "editor", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, ReturnsJob = true, TimeoutMs = 120000)]
+        public static WorkflowJobStartOutput EditorStop(EditorActionInput input, UnityMcpContext context)
         {
-            if (!context.DryRun) EditorApplication.isPlaying = false;
-            return Change(context, "Exit Play Mode.");
+            if (context.DryRun) return new WorkflowJobStartOutput { dryRun = true, summary = "Exit Play Mode and wait for a stable Editor state." };
+            var job = EditorWorkflowJobRunner.Start(new EditorPlayModeOperation(false), "play-mode");
+            return new WorkflowJobStartOutput { accepted = true, jobId = job.jobId, status = job.status, summary = "Exit Play Mode transition queued." };
         }
 
         [UnityMcpTool("editor-selection-set", Description = "Set Editor selection; dry-run unless apply is true.", Category = "editor", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
         public static ChangeOutput EditorSelectionSet(EditorSelectionSetInput input, UnityMcpContext context)
         {
-            var objects = input.instanceIds.Select(EditorUtility.InstanceIDToObject).Where(v => v != null).ToArray();
+            var objects = input.instanceIds.Select(id => EditorUtility.EntityIdToObject((EntityId)id)).Where(v => v != null).ToArray();
             if (objects.Length != input.instanceIds.Count) throw new ArgumentException("One or more instance IDs were not found.");
             if (!context.DryRun)
             {
                 Selection.objects = objects;
-                if (input.activeInstanceId.HasValue) Selection.activeObject = EditorUtility.InstanceIDToObject(input.activeInstanceId.Value);
+                if (input.activeInstanceId.HasValue) Selection.activeObject = EditorUtility.EntityIdToObject((EntityId)input.activeInstanceId.Value);
             }
             return Change(context, $"Select {objects.Length} object(s).");
         }
@@ -353,7 +356,7 @@ namespace DucMinh.UnityMcp.Editor
         {
             if (instanceId.HasValue)
             {
-                var value = EditorUtility.InstanceIDToObject(instanceId.Value) as GameObject;
+                var value = EditorUtility.EntityIdToObject((EntityId)instanceId.Value) as GameObject;
                 if (value != null && value.scene.IsValid()) return value;
             }
             if (!string.IsNullOrEmpty(path))
@@ -411,6 +414,44 @@ public static class {input.className}
         }
     }
 
+    internal sealed class EditorPlayModeOperation : IEditorWorkflowOperation
+    {
+        private readonly bool enterPlayMode;
+        private readonly DateTime deadlineUtc = DateTime.UtcNow.AddMinutes(2);
+        private bool requested;
+        private int stableFrames;
+
+        public EditorPlayModeOperation(bool enterPlayMode) { this.enterPlayMode = enterPlayMode; }
+        public bool DrainWhenCancelled => false;
+
+        public bool Tick(UnityMcpJob job)
+        {
+            if (!requested)
+            {
+                requested = true;
+                EditorApplication.isPlaying = enterPlayMode;
+                UnityMcpJobStore.Shared.Report(job, 0.1f, enterPlayMode ? "Entering Play Mode." : "Exiting Play Mode.");
+                return false;
+            }
+            if (DateTime.UtcNow > deadlineUtc)
+            {
+                EditorWorkflowJobRunner.Fail(job, "Timed out waiting for the Editor to reach a stable Play Mode state.");
+                return true;
+            }
+            var targetReached = EditorApplication.isPlaying == enterPlayMode && !EditorApplication.isCompiling && !EditorApplication.isUpdating;
+            if (!targetReached) { stableFrames = 0; return false; }
+            stableFrames++;
+            UnityMcpJobStore.Shared.Report(job, Math.Min(0.95f, 0.5f + stableFrames * 0.2f), "Waiting for the Editor to remain stable.");
+            if (stableFrames < 3) return false;
+            EditorWorkflowJobRunner.Succeed(job, new PlayModeSessionOutput
+            {
+                isPlaying = EditorApplication.isPlaying, isPaused = EditorApplication.isPaused,
+                isCompiling = EditorApplication.isCompiling, isUpdating = EditorApplication.isUpdating, stableEditorFrames = stableFrames
+            });
+            return true;
+        }
+    }
+
     internal static class ConsoleReflection
     {
         public static ConsoleReadOutput Read(ConsoleReadInput input)
@@ -424,10 +465,17 @@ public static class {input.className}
             var end = logEntries.GetMethod("EndGettingEntries", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
             var get = logEntries.GetMethod("GetEntryInternal", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
             var limit = Math.Max(1, Math.Min(input.limit, 1000));
+            var afterCursor = input.afterCursor;
+            var cursorReset = afterCursor >= count;
+            if (cursorReset) afterCursor = -1;
+            var first = afterCursor >= 0 ? Math.Min(count, (int)afterCursor + 1) : count - 1;
+            var step = afterCursor >= 0 ? 1 : -1;
+            var observedUtc = DateTime.UtcNow.ToString("O");
+            output.cursorReset = cursorReset;
             start?.Invoke(null, null);
             try
             {
-                for (var index = count - 1; index >= 0; index--)
+                for (var index = first; index >= 0 && index < count; index += step)
                 {
                     var entry = Activator.CreateInstance(logEntry);
                     get?.Invoke(null, new[] { (object)index, entry });
@@ -437,10 +485,16 @@ public static class {input.className}
                     if (!string.IsNullOrEmpty(input.severity) && !string.Equals(input.severity, severity, StringComparison.OrdinalIgnoreCase)) continue;
                     if (!string.IsNullOrEmpty(input.contains) && (message == null || message.IndexOf(input.contains, StringComparison.OrdinalIgnoreCase) < 0)) continue;
                     if (output.entries.Count >= limit) { output.truncated = true; break; }
-                    output.entries.Add(new ConsoleEntryInfo { message = message, stackTrace = Convert.ToString(Field(logEntry, entry, "stackTrace")), file = Convert.ToString(Field(logEntry, entry, "file")), line = Convert.ToInt32(Field(logEntry, entry, "line") ?? 0), severity = severity });
+                    output.entries.Add(new ConsoleEntryInfo { cursor = index, observedUtc = observedUtc, message = message, stackTrace = Convert.ToString(Field(logEntry, entry, "stackTrace")), file = Convert.ToString(Field(logEntry, entry, "file")), line = Convert.ToInt32(Field(logEntry, entry, "line") ?? 0), severity = severity });
                 }
             }
             finally { end?.Invoke(null, null); }
+            if (output.entries.Count > 0)
+            {
+                output.firstCursor = output.entries[0].cursor;
+                output.lastCursor = output.entries[output.entries.Count - 1].cursor;
+            }
+            output.nextCursor = count - 1;
             return output;
         }
 

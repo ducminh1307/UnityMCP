@@ -575,19 +575,28 @@
     min-width: 180px;
 }
 
-.unity-mcp-tool-group__actions {
-    flex-direction: row;
-    align-items: center;
+.unity-mcp-tool-group__enablement {
     margin-left: auto;
+    width: auto;
+    min-width: 0;
+    flex-direction: row-reverse;
+    flex-grow: 0;
+    flex-shrink: 0;
+    font-size: 10px;
+    -unity-font-style: bold;
 }
 
-.unity-mcp-tool-group__action {
-    min-width: 80px;
-    min-height: 21px;
-    margin-left: 4px;
-    padding-left: 6px;
-    padding-right: 6px;
-    font-size: 10px;
+.unity-mcp-tool-group__enablement > .unity-base-field__label {
+    width: auto;
+    min-width: 0;
+    flex-grow: 0;
+    flex-basis: auto;
+    margin-left: 5px;
+}
+
+.unity-mcp-tool-group__enablement > .unity-base-field__input {
+    flex-grow: 0;
+    flex-shrink: 0;
 }
 
 .unity-mcp-tool-group > .unity-foldout__content {
@@ -677,31 +686,61 @@
     border-bottom-left-radius: 8px;
     font-size: 9px;
     -unity-font-style: bold;
-    opacity: 0.78;
+    opacity: 1;
 }
 
 .unity-mcp-badge--enabled {
-    border-top-color: var(--unity-colors-focus-border);
-    border-right-color: var(--unity-colors-focus-border);
-    border-bottom-color: var(--unity-colors-focus-border);
-    border-left-color: var(--unity-colors-focus-border);
+    color: rgb(126, 232, 159);
+    background-color: rgba(38, 149, 76, 0.24);
+    border-top-color: rgb(62, 184, 101);
+    border-right-color: rgb(62, 184, 101);
+    border-bottom-color: rgb(62, 184, 101);
+    border-left-color: rgb(62, 184, 101);
 }
 
 .unity-mcp-badge--disabled {
-    opacity: 0.56;
+    color: rgb(238, 151, 151);
+    background-color: rgba(173, 54, 54, 0.2);
+    border-top-color: rgb(184, 78, 78);
+    border-right-color: rgb(184, 78, 78);
+    border-bottom-color: rgb(184, 78, 78);
+    border-left-color: rgb(184, 78, 78);
 }
 
 .unity-mcp-badge--safe-read {
-    opacity: 0.74;
+    color: rgb(137, 202, 255);
+    background-color: rgba(45, 120, 195, 0.19);
+    border-top-color: rgb(65, 142, 220);
+    border-right-color: rgb(65, 142, 220);
+    border-bottom-color: rgb(65, 142, 220);
+    border-left-color: rgb(65, 142, 220);
 }
 
-.unity-mcp-badge--write,
-.unity-mcp-badge--destructive,
+.unity-mcp-badge--write {
+    color: rgb(255, 207, 112);
+    background-color: rgba(185, 124, 24, 0.2);
+    border-top-color: rgb(211, 151, 50);
+    border-right-color: rgb(211, 151, 50);
+    border-bottom-color: rgb(211, 151, 50);
+    border-left-color: rgb(211, 151, 50);
+}
+
+.unity-mcp-badge--destructive {
+    color: rgb(255, 139, 139);
+    background-color: rgba(185, 48, 48, 0.24);
+    border-top-color: rgb(218, 74, 74);
+    border-right-color: rgb(218, 74, 74);
+    border-bottom-color: rgb(218, 74, 74);
+    border-left-color: rgb(218, 74, 74);
+}
+
 .unity-mcp-badge--unsafe {
-    border-top-color: var(--unity-colors-focus-border);
-    border-right-color: var(--unity-colors-focus-border);
-    border-bottom-color: var(--unity-colors-focus-border);
-    border-left-color: var(--unity-colors-focus-border);
+    color: rgb(235, 157, 255);
+    background-color: rgba(142, 60, 184, 0.22);
+    border-top-color: rgb(176, 86, 216);
+    border-right-color: rgb(176, 86, 216);
+    border-bottom-color: rgb(176, 86, 216);
+    border-left-color: rgb(176, 86, 216);
 }
 
 .unity-mcp-help {

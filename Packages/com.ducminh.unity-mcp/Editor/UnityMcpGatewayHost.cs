@@ -21,6 +21,7 @@ namespace DucMinh.UnityMcp.Editor
         public string ExecutablePath { get; set; }
         public int PreferredPort { get; set; }
         public string McpPath { get; set; }
+        public bool DebugLoggingEnabled { get; set; }
 
         internal UnityMcpGatewaySettings Clone()
         {
@@ -28,7 +29,8 @@ namespace DucMinh.UnityMcp.Editor
             {
                 ExecutablePath = ExecutablePath,
                 PreferredPort = PreferredPort,
-                McpPath = McpPath
+                McpPath = McpPath,
+                DebugLoggingEnabled = DebugLoggingEnabled
             };
         }
     }
@@ -96,6 +98,8 @@ namespace DucMinh.UnityMcp.Editor
         private static bool processExited;
         private static bool gatewayReady;
         private static bool restartAfterAssemblyReload;
+        private static bool restartAfterGatewayExit;
+        private static int restartPort;
         private static DateTime restartDeadlineUtc;
         private static string bearerToken;
         private static readonly Queue<string> recentLogs = new Queue<string>();
@@ -104,9 +108,12 @@ namespace DucMinh.UnityMcp.Editor
 
         static UnityMcpGatewayHost()
         {
-            // A domain reload must never leave a Python process behind. The SessionState fallback
-            // handles the rare case where Unity lost the managed Process reference during reload.
-            StopPersistedGatewayIfOwned();
+            // Keep the gateway alive through a domain reload. The Editor bridge deliberately
+            // reuses its descriptor identity, token, and port, so the long-lived gateway can
+            // ride out the brief bridge outage and refresh its registry afterwards. Killing the
+            // gateway here tears down every MCP HTTP session and is the source of intermittent
+            // client disconnects during script compilation.
+            RecoverPersistedGatewayIfOwned();
             restartAfterAssemblyReload = SessionState.GetBool(SessionKey("restartAfterReload"), false);
             SessionState.EraseBool(SessionKey("restartAfterReload"));
             if (restartAfterAssemblyReload) restartDeadlineUtc = DateTime.UtcNow + StartupTimeout;
@@ -127,7 +134,9 @@ namespace DucMinh.UnityMcp.Editor
                     PreferredPort = EditorPrefs.HasKey(PreferenceKey("preferredPort"))
                         ? ClampPort(EditorPrefs.GetInt(PreferenceKey("preferredPort"), DefaultPort))
                         : GetDefaultPreferredPort(),
-                    McpPath = NormalizeMcpPath(EditorPrefs.GetString(PreferenceKey("mcpPath"), DefaultMcpPath))
+                    McpPath = NormalizeMcpPath(EditorPrefs.GetString(PreferenceKey("mcpPath"), DefaultMcpPath)),
+                    DebugLoggingEnabled = !EditorPrefs.HasKey(PreferenceKey("debugLoggingEnabled"))
+                        || EditorPrefs.GetBool(PreferenceKey("debugLoggingEnabled"), true)
                 };
             }
         }
@@ -165,6 +174,7 @@ namespace DucMinh.UnityMcp.Editor
                 EditorPrefs.SetString(PreferenceKey("executablePath"), executablePath);
                 EditorPrefs.SetInt(PreferenceKey("preferredPort"), settings.PreferredPort);
                 EditorPrefs.SetString(PreferenceKey("mcpPath"), mcpPath);
+                EditorPrefs.SetBool(PreferenceKey("debugLoggingEnabled"), settings.DebugLoggingEnabled);
             }
             return true;
         }
@@ -180,6 +190,12 @@ namespace DucMinh.UnityMcp.Editor
         /// not ever use implicit instance selection, so concurrent Unity projects stay isolated.
         /// </summary>
         public static bool Start(out string error)
+        {
+            return Start(out error, null, false);
+        }
+
+        /// <summary>Starts the gateway, optionally reserving one exact loopback port for a restart.</summary>
+        private static bool Start(out string error, int? requiredPort, bool requireExactPort)
         {
             error = null;
             UnityMcpGatewayStatus changedStatus = null;
@@ -223,10 +239,14 @@ namespace DucMinh.UnityMcp.Editor
                         }
                         else
                         {
-                            var port = FindAvailablePort(settings.PreferredPort);
+                            var port = requireExactPort && requiredPort.HasValue
+                                ? (IsLoopbackPortAvailable(requiredPort.Value) ? requiredPort.Value : 0)
+                                : FindAvailablePort(settings.PreferredPort);
                             if (port == 0)
                             {
-                                error = "Could not reserve a free loopback port for the UnityMCP gateway.";
+                                error = requireExactPort && requiredPort.HasValue
+                                    ? "The existing UnityMCP gateway port is still unavailable."
+                                    : "Could not reserve a free loopback port for the UnityMCP gateway.";
                                 SetStatusLocked(CreateErrorStatus(error));
                                 changedStatus = SnapshotStatusLocked();
                             }
@@ -294,6 +314,8 @@ namespace DucMinh.UnityMcp.Editor
             lock (Gate)
             {
                 restartAfterAssemblyReload = false;
+                restartAfterGatewayExit = false;
+                restartPort = 0;
                 SessionState.EraseBool(SessionKey("restartAfterReload"));
                 expectedStop = true;
                 StopGatewayProcessLocked();
@@ -309,18 +331,23 @@ namespace DucMinh.UnityMcp.Editor
             UnityMcpGatewayStatus changedStatus;
             lock (Gate)
             {
-                // A second compilation can trigger another reload before this new domain has
-                // observed the bridge descriptor. Preserve an inherited restart intent instead
-                // of overwriting it with the current (intentionally stopped) child state.
-                var shouldRestart = status.IsRunning
-                    || restartAfterAssemblyReload
-                    || SessionState.GetBool(SessionKey("restartAfterReload"), false);
-                SessionState.SetBool(SessionKey("restartAfterReload"), shouldRestart);
+                // Do not kill the child here. UnityMcpEditorBootstrap rebinds the bridge using
+                // the same session descriptor after the reload, while the gateway's registry
+                // poller reports a retryable reloading state and then reconnects automatically.
+                // Keep the persisted process record so the next domain can reattach ownership.
+                SessionState.EraseBool(SessionKey("restartAfterReload"));
                 restartAfterAssemblyReload = false;
-                expectedStop = true;
-                StopGatewayProcessLocked();
-                ClearPersistedGatewayLocked();
-                SetStatusLocked(NewStoppedStatus(shouldRestart ? "Gateway will restart after the Unity domain reload." : "Gateway is stopped."));
+                SetStatusLocked(status.IsRunning
+                    ? new UnityMcpGatewayStatus
+                    {
+                        State = UnityMcpGatewayState.Running,
+                        Message = "Gateway remains connected while the Unity domain reloads.",
+                        Port = status.Port,
+                        ProcessId = status.ProcessId,
+                        Endpoint = status.Endpoint,
+                        InstanceId = status.InstanceId
+                    }
+                    : NewStoppedStatus("Gateway is stopped."));
                 changedStatus = SnapshotStatusLocked();
             }
             RaiseStatusChanged(changedStatus);
@@ -508,9 +535,48 @@ namespace DucMinh.UnityMcp.Editor
         {
             UnityMcpGatewayStatus changedStatus = null;
             var startAfterReload = false;
+            var restartForBridgeReplacement = false;
             lock (Gate)
             {
                 if (RefreshProcessStateLocked()) changedStatus = SnapshotStatusLocked();
+
+                // Normally the Editor bridge reuses its descriptor across a domain reload and
+                // the gateway can remain connected. If the bridge had to fall back to a new
+                // descriptor (for example its former loopback port was not available), the
+                // existing gateway is permanently pinned to the old bridge. Restart it as soon
+                // as the replacement bridge is ready instead of leaving every MCP call to time
+                // out against the retired endpoint.
+                var currentDescriptor = FindCurrentEditorDescriptor();
+                if (gatewayProcess != null
+                    && status.IsRunning
+                    && currentDescriptor != null
+                    && !string.Equals(status.InstanceId, currentDescriptor.instanceId, StringComparison.Ordinal))
+                {
+                    // Keep the Process handle until the old listener is really gone. Starting
+                    // immediately after Kill can make FindAvailablePort choose a different
+                    // port, leaving long-lived Streamable HTTP clients on the retired URL.
+                    restartAfterGatewayExit = true;
+                    restartPort = status.Port;
+                    expectedStop = true;
+                    KillGatewayProcessLocked();
+                    SetStatusLocked(new UnityMcpGatewayStatus
+                    {
+                        State = UnityMcpGatewayState.Starting,
+                        Message = "Unity bridge identity changed; waiting to restart the gateway on its existing port.",
+                        Port = status.Port,
+                        ProcessId = status.ProcessId,
+                        Endpoint = status.Endpoint,
+                        InstanceId = currentDescriptor.instanceId
+                    });
+                    changedStatus = SnapshotStatusLocked();
+                }
+
+                if (restartAfterGatewayExit && gatewayProcess == null && FindCurrentEditorDescriptor() != null)
+                {
+                    restartAfterGatewayExit = false;
+                    restartForBridgeReplacement = true;
+                }
+
                 if (restartAfterAssemblyReload)
                 {
                     if (FindCurrentEditorDescriptor() != null)
@@ -530,6 +596,7 @@ namespace DucMinh.UnityMcp.Editor
                 RefreshManagedProjectConfigurations();
             if (changedStatus != null) RaiseStatusChanged(changedStatus);
             if (startAfterReload) Start(out _);
+            if (restartForBridgeReplacement) Start(out _, restartPort, true);
         }
 
         private static void RefreshManagedProjectConfigurations()
@@ -709,19 +776,29 @@ namespace DucMinh.UnityMcp.Editor
         private static void StopGatewayProcessLocked()
         {
             if (gatewayProcess == null) return;
+            KillGatewayProcessLocked();
+            DisposeGatewayProcessLocked();
+            processExited = false;
+            gatewayReady = false;
+            expectedStop = false;
+        }
+
+        private static void KillGatewayProcessLocked()
+        {
+            if (gatewayProcess == null) return;
             try
             {
                 if (!gatewayProcess.HasExited)
                 {
                     gatewayProcess.Kill();
-                    gatewayProcess.WaitForExit(3000);
+                    // This method runs from Editor UI callbacks and Unity lifecycle events.
+                    // Waiting for Python to terminate here can block the Editor while a domain
+                    // reload waits for this assembly to return (and has previously left the
+                    // Stop gateway button stuck). Kill is asynchronous; release our handle and
+                    // let the OS finish process teardown in the background.
                 }
             }
             catch { /* The process may have exited concurrently. */ }
-            DisposeGatewayProcessLocked();
-            processExited = false;
-            gatewayReady = false;
-            expectedStop = false;
         }
 
         private static void DisposeGatewayProcessLocked()
@@ -738,25 +815,54 @@ namespace DucMinh.UnityMcp.Editor
             gatewayProcess = null;
         }
 
-        private static void StopPersistedGatewayIfOwned()
+        private static void RecoverPersistedGatewayIfOwned()
         {
             var rawPid = SessionState.GetString(SessionKey("pid"), string.Empty);
             var rawStartedTicks = SessionState.GetString(SessionKey("startedTicks"), string.Empty);
-            if (!int.TryParse(rawPid, out var pid) || !long.TryParse(rawStartedTicks, out var startedTicks))
+            var rawPort = SessionState.GetString(SessionKey("port"), string.Empty);
+            var instanceId = SessionState.GetString(SessionKey("instanceId"), string.Empty);
+            if (!int.TryParse(rawPid, out var pid)
+                || !long.TryParse(rawStartedTicks, out var startedTicks)
+                || !int.TryParse(rawPort, out var port)
+                || port < 1 || port > 65535
+                || !IsSafeArgumentToken(instanceId))
             {
                 ClearPersistedGateway();
                 return;
             }
             try
             {
-                using (var process = Process.GetProcessById(pid))
+                var process = Process.GetProcessById(pid);
+                if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != startedTicks)
                 {
-                    var actualTicks = process.StartTime.ToUniversalTime().Ticks;
-                    if (!process.HasExited && actualTicks == startedTicks) process.Kill();
+                    process.Dispose();
+                    ClearPersistedGateway();
+                    return;
                 }
+
+                process.EnableRaisingEvents = true;
+                process.Exited += OnGatewayProcessExited;
+                gatewayProcess = process;
+                expectedStop = false;
+                processExited = false;
+                gatewayReady = true;
+                var endpoint = BuildEndpoint(port, GetSettings().McpPath);
+                SetStatusLocked(new UnityMcpGatewayStatus
+                {
+                    State = UnityMcpGatewayState.Running,
+                    Message = "UnityMCP HTTP gateway recovered after the Unity domain reload.",
+                    Port = port,
+                    ProcessId = pid,
+                    Endpoint = endpoint,
+                    InstanceId = instanceId
+                });
             }
-            catch { /* PID may already be gone, reused, or inaccessible. */ }
-            ClearPersistedGateway();
+            catch
+            {
+                // The PID may be gone, reused, or inaccessible. Never touch an unverified
+                // process; simply discard the stale ownership record.
+                ClearPersistedGateway();
+            }
         }
 
         private static void PersistOwnedGatewayLocked(Process process, int port, string instanceId)
