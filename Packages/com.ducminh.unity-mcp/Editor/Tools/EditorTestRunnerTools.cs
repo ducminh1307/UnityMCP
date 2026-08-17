@@ -78,6 +78,7 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class TestJobGetInput { public string jobId; }
     [Serializable] public sealed class TestCancelInput { public string jobId; public bool apply; }
     [Serializable] public sealed class TestCancelOutput { public bool dryRun; public bool cancelled; public string jobId; public string runnerId; public string status; public string summary; }
+    [Serializable] internal sealed class PersistedTestRun { public string jobId; public string runnerId; public string mode; public string createdUtc; public string startedUtc; public string deadlineUtc; public float progress; public string progressMessage; }
 
     /// <summary>
     /// Test Framework integration. The UPM package declares com.unity.test-framework,
@@ -114,6 +115,7 @@ namespace DucMinh.UnityMcp.Editor
                     run.runnerId = api.Execute(new ExecutionSettings(filter));
                     if (string.IsNullOrWhiteSpace(run.runnerId)) throw new InvalidOperationException("The Unity Test Framework did not return a run identifier.");
                     UnityMcpJobStore.Shared.Start(job, "Unity Test Framework run started.");
+                    TestRunRecovery.Track(job, run.runnerId, ModeName(filter.testMode));
                     return new TestRunStartOutput
                     {
                         accepted = true,
@@ -130,6 +132,7 @@ namespace DucMinh.UnityMcp.Editor
                 {
                     if (ReferenceEquals(active, run)) active = null;
                     UnityMcpJobStore.Shared.Fail(job, "The Unity Test Framework run could not be started. See the local Unity Console for details.");
+                    TestRunRecovery.Clear(job.jobId);
                     run.Dispose();
                     throw;
                 }
@@ -167,7 +170,33 @@ namespace DucMinh.UnityMcp.Editor
                     throw new InvalidOperationException("Unity Test Framework did not accept cancellation for this run.");
                 run.cancelRequested = true;
                 UnityMcpJobStore.Shared.Cancel(run.job.jobId, out _);
+                TestRunRecovery.Clear(run.job.jobId);
                 return new TestCancelOutput { cancelled = true, jobId = run.job.jobId, runnerId = run.runnerId, status = run.job.status, summary = "Cancellation requested from Unity Test Framework." };
+            }
+        }
+
+        // TestRunnerApi dispatches callbacks process-wide, so a fresh API instance can
+        // subscribe to the run that was already started before a PlayMode domain reload.
+        // Keeping this reattachment here also makes cancellation available after reconnect.
+        internal static void RecoverActiveTestRun(UnityMcpJob job, string runnerId)
+        {
+            lock (Gate)
+            {
+                if (active != null && !active.IsFinished) return;
+                var api = ScriptableObject.CreateInstance<TestRunnerApi>();
+                var run = new ActiveTestRun(job, api) { runnerId = runnerId };
+                try
+                {
+                    api.RegisterCallbacks(run);
+                    active = run;
+                }
+                catch
+                {
+                    if (ReferenceEquals(active, run)) active = null;
+                    run.Dispose();
+                    UnityMcpJobStore.Shared.Fail(job, "Unity reloaded during the PlayMode test and Unity Test Framework callbacks could not be reconnected.");
+                    TestRunRecovery.Clear(job.jobId);
+                }
             }
         }
 
@@ -285,6 +314,7 @@ namespace DucMinh.UnityMcp.Editor
                     output.progress = job.progress;
                     output.progressMessage = job.progressMessage;
                     output.durationMilliseconds = job.durationMilliseconds;
+                    TestRunRecovery.Clear(job.jobId);
                     Dispose();
                     if (ReferenceEquals(active, this)) active = null;
                 }
@@ -322,6 +352,63 @@ namespace DucMinh.UnityMcp.Editor
                 if (string.IsNullOrEmpty(value) || value.Length <= limit) return value;
                 return value.Substring(0, limit - 1) + "…";
             }
+        }
+    }
+
+    [InitializeOnLoad]
+    internal static class TestRunRecovery
+    {
+        private const string SessionKey = "DucMinh.UnityMcp.TestRun";
+
+        static TestRunRecovery()
+        {
+            EditorApplication.delayCall += Restore;
+        }
+
+        public static void Track(UnityMcpJob job, string runnerId, string mode)
+        {
+            if (job == null || string.IsNullOrWhiteSpace(runnerId)) return;
+            SessionState.SetString(SessionKey, JsonConvert.SerializeObject(new PersistedTestRun
+            {
+                jobId = job.jobId,
+                runnerId = runnerId,
+                mode = mode,
+                createdUtc = job.createdUtc,
+                startedUtc = job.startedUtc,
+                deadlineUtc = DateTime.UtcNow.AddMinutes(10).ToString("O"),
+                progress = job.progress,
+                progressMessage = job.progressMessage
+            }));
+        }
+
+        public static void Clear(string jobId)
+        {
+            var raw = SessionState.GetString(SessionKey, string.Empty);
+            if (string.IsNullOrEmpty(raw)) return;
+            try
+            {
+                var persisted = JsonConvert.DeserializeObject<PersistedTestRun>(raw);
+                if (persisted == null || string.Equals(persisted.jobId, jobId, StringComparison.Ordinal)) SessionState.EraseString(SessionKey);
+            }
+            catch { SessionState.EraseString(SessionKey); }
+        }
+
+        private static void Restore()
+        {
+            var raw = SessionState.GetString(SessionKey, string.Empty);
+            if (string.IsNullOrEmpty(raw)) return;
+            PersistedTestRun persisted;
+            try { persisted = JsonConvert.DeserializeObject<PersistedTestRun>(raw); }
+            catch { SessionState.EraseString(SessionKey); return; }
+            if (persisted == null || string.IsNullOrWhiteSpace(persisted.jobId) || string.IsNullOrWhiteSpace(persisted.runnerId) || !DateTime.TryParse(persisted.deadlineUtc, out var deadlineUtc)) { SessionState.EraseString(SessionKey); return; }
+            var job = UnityMcpJobStore.Shared.Restore(persisted.jobId, "test", "running", persisted.progress, "Unity reloaded during PlayMode test; reconnecting Test Framework callbacks.", persisted.createdUtc, persisted.startedUtc);
+            if (DateTime.UtcNow > deadlineUtc)
+            {
+                UnityMcpJobStore.Shared.Fail(job, "Timed out waiting for the PlayMode test run to reconnect after the Unity domain reload.");
+                SessionState.EraseString(SessionKey);
+                return;
+            }
+            EditorTestRunnerTools.RecoverActiveTestRun(job, persisted.runnerId);
         }
     }
 }

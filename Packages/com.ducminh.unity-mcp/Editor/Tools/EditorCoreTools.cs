@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditor.Compilation;
@@ -21,6 +22,7 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class EditorSelectionSetInput { public List<int> instanceIds = new List<int>(); public int? activeInstanceId; public bool apply; }
     [Serializable] public sealed class EditorActionInput { public bool apply; }
     [Serializable] public sealed class PlayModeSessionOutput { public bool isPlaying; public bool isPaused; public bool isCompiling; public bool isUpdating; public int stableEditorFrames; }
+    [Serializable] internal sealed class PersistedPlayModeTransition { public string jobId; public bool targetPlayMode; public string deadlineUtc; public string createdUtc; public string startedUtc; public float progress; public string progressMessage; }
     [Serializable] public sealed class SceneCreateInput { public string path; public bool withDefaultGameObjects; public bool additive; public bool apply; }
     [Serializable] public sealed class SceneOpenInput { public string path; public bool additive; public bool apply; }
     [Serializable] public sealed class SceneSaveInput { public string scene; public string path; public bool apply; }
@@ -417,11 +419,16 @@ public static class {input.className}
     internal sealed class EditorPlayModeOperation : IEditorWorkflowOperation
     {
         private readonly bool enterPlayMode;
-        private readonly DateTime deadlineUtc = DateTime.UtcNow.AddMinutes(2);
+        private readonly DateTime deadlineUtc;
         private bool requested;
         private int stableFrames;
 
-        public EditorPlayModeOperation(bool enterPlayMode) { this.enterPlayMode = enterPlayMode; }
+        public EditorPlayModeOperation(bool enterPlayMode, DateTime? deadlineUtc = null, bool requestAlreadySubmitted = false)
+        {
+            this.enterPlayMode = enterPlayMode;
+            this.deadlineUtc = deadlineUtc ?? DateTime.UtcNow.AddMinutes(2);
+            requested = requestAlreadySubmitted;
+        }
         public bool DrainWhenCancelled => false;
 
         public bool Tick(UnityMcpJob job)
@@ -429,6 +436,7 @@ public static class {input.className}
             if (!requested)
             {
                 requested = true;
+                PlayModeTransitionRecovery.Track(job, enterPlayMode, deadlineUtc);
                 EditorApplication.isPlaying = enterPlayMode;
                 UnityMcpJobStore.Shared.Report(job, 0.1f, enterPlayMode ? "Entering Play Mode." : "Exiting Play Mode.");
                 return false;
@@ -436,6 +444,7 @@ public static class {input.className}
             if (DateTime.UtcNow > deadlineUtc)
             {
                 EditorWorkflowJobRunner.Fail(job, "Timed out waiting for the Editor to reach a stable Play Mode state.");
+                PlayModeTransitionRecovery.Clear(job.jobId);
                 return true;
             }
             var targetReached = EditorApplication.isPlaying == enterPlayMode && !EditorApplication.isCompiling && !EditorApplication.isUpdating;
@@ -448,7 +457,64 @@ public static class {input.className}
                 isPlaying = EditorApplication.isPlaying, isPaused = EditorApplication.isPaused,
                 isCompiling = EditorApplication.isCompiling, isUpdating = EditorApplication.isUpdating, stableEditorFrames = stableFrames
             });
+            PlayModeTransitionRecovery.Clear(job.jobId);
             return true;
+        }
+    }
+
+    [InitializeOnLoad]
+    internal static class PlayModeTransitionRecovery
+    {
+        private const string SessionKey = "DucMinh.UnityMcp.PlayModeTransition";
+
+        static PlayModeTransitionRecovery()
+        {
+            EditorApplication.delayCall += Restore;
+        }
+
+        public static void Track(UnityMcpJob job, bool targetPlayMode, DateTime deadlineUtc)
+        {
+            if (job == null) return;
+            SessionState.SetString(SessionKey, JsonConvert.SerializeObject(new PersistedPlayModeTransition
+            {
+                jobId = job.jobId,
+                targetPlayMode = targetPlayMode,
+                deadlineUtc = deadlineUtc.ToUniversalTime().ToString("O"),
+                createdUtc = job.createdUtc,
+                startedUtc = job.startedUtc,
+                progress = job.progress,
+                progressMessage = job.progressMessage
+            }));
+        }
+
+        public static void Clear(string jobId)
+        {
+            var raw = SessionState.GetString(SessionKey, string.Empty);
+            if (string.IsNullOrEmpty(raw)) return;
+            try
+            {
+                var persisted = JsonConvert.DeserializeObject<PersistedPlayModeTransition>(raw);
+                if (persisted == null || string.Equals(persisted.jobId, jobId, StringComparison.Ordinal)) SessionState.EraseString(SessionKey);
+            }
+            catch { SessionState.EraseString(SessionKey); }
+        }
+
+        private static void Restore()
+        {
+            var raw = SessionState.GetString(SessionKey, string.Empty);
+            if (string.IsNullOrEmpty(raw)) return;
+            PersistedPlayModeTransition persisted;
+            try { persisted = JsonConvert.DeserializeObject<PersistedPlayModeTransition>(raw); }
+            catch { SessionState.EraseString(SessionKey); return; }
+            if (persisted == null || string.IsNullOrWhiteSpace(persisted.jobId) || !DateTime.TryParse(persisted.deadlineUtc, out var deadlineUtc)) { SessionState.EraseString(SessionKey); return; }
+            var job = UnityMcpJobStore.Shared.Restore(persisted.jobId, "play-mode", "running", persisted.progress, persisted.progressMessage, persisted.createdUtc, persisted.startedUtc);
+            if (DateTime.UtcNow > deadlineUtc)
+            {
+                UnityMcpJobStore.Shared.Fail(job, "Timed out while Unity reloaded the domain during the Play Mode transition.");
+                SessionState.EraseString(SessionKey);
+                return;
+            }
+            EditorWorkflowJobRunner.Resume(job, new EditorPlayModeOperation(persisted.targetPlayMode, deadlineUtc.ToUniversalTime(), true));
         }
     }
 

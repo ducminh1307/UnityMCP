@@ -113,10 +113,17 @@ namespace DucMinh.UnityMcp.Editor
             // ride out the brief bridge outage and refresh its registry afterwards. Killing the
             // gateway here tears down every MCP HTTP session and is the source of intermittent
             // client disconnects during script compilation.
-            RecoverPersistedGatewayIfOwned();
+            var recoveredGateway = RecoverPersistedGatewayIfOwned();
             restartAfterAssemblyReload = SessionState.GetBool(SessionKey("restartAfterReload"), false);
+            int.TryParse(SessionState.GetString(SessionKey("restartPort"), string.Empty), out restartPort);
             SessionState.EraseBool(SessionKey("restartAfterReload"));
-            if (restartAfterAssemblyReload) restartDeadlineUtc = DateTime.UtcNow + StartupTimeout;
+            SessionState.EraseString(SessionKey("restartPort"));
+            // The normal path keeps the child process alive. If it died while Unity was
+            // replacing the managed domain, restart it on the same endpoint so the MCP
+            // client configuration remains valid instead of leaving the transport offline.
+            if (restartAfterAssemblyReload && !recoveredGateway && restartPort > 0)
+                restartDeadlineUtc = DateTime.UtcNow + StartupTimeout;
+            else restartAfterAssemblyReload = false;
             AssemblyReloadEvents.beforeAssemblyReload += StopForAssemblyReload;
             EditorApplication.quitting += Stop;
             EditorApplication.update += Tick;
@@ -335,7 +342,16 @@ namespace DucMinh.UnityMcp.Editor
                 // the same session descriptor after the reload, while the gateway's registry
                 // poller reports a retryable reloading state and then reconnects automatically.
                 // Keep the persisted process record so the next domain can reattach ownership.
-                SessionState.EraseBool(SessionKey("restartAfterReload"));
+                if (status.IsRunning && status.Port > 0)
+                {
+                    SessionState.SetBool(SessionKey("restartAfterReload"), true);
+                    SessionState.SetString(SessionKey("restartPort"), status.Port.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+                else
+                {
+                    SessionState.EraseBool(SessionKey("restartAfterReload"));
+                    SessionState.EraseString(SessionKey("restartPort"));
+                }
                 restartAfterAssemblyReload = false;
                 SetStatusLocked(status.IsRunning
                     ? new UnityMcpGatewayStatus
@@ -595,7 +611,11 @@ namespace DucMinh.UnityMcp.Editor
             if (changedStatus != null && changedStatus.State == UnityMcpGatewayState.Running)
                 RefreshManagedProjectConfigurations();
             if (changedStatus != null) RaiseStatusChanged(changedStatus);
-            if (startAfterReload) Start(out _);
+            if (startAfterReload)
+            {
+                if (restartPort > 0) Start(out _, restartPort, true);
+                else Start(out _);
+            }
             if (restartForBridgeReplacement) Start(out _, restartPort, true);
         }
 
@@ -815,7 +835,7 @@ namespace DucMinh.UnityMcp.Editor
             gatewayProcess = null;
         }
 
-        private static void RecoverPersistedGatewayIfOwned()
+        private static bool RecoverPersistedGatewayIfOwned()
         {
             var rawPid = SessionState.GetString(SessionKey("pid"), string.Empty);
             var rawStartedTicks = SessionState.GetString(SessionKey("startedTicks"), string.Empty);
@@ -828,7 +848,7 @@ namespace DucMinh.UnityMcp.Editor
                 || !IsSafeArgumentToken(instanceId))
             {
                 ClearPersistedGateway();
-                return;
+                return false;
             }
             try
             {
@@ -837,7 +857,7 @@ namespace DucMinh.UnityMcp.Editor
                 {
                     process.Dispose();
                     ClearPersistedGateway();
-                    return;
+                    return false;
                 }
 
                 process.EnableRaisingEvents = true;
@@ -856,12 +876,14 @@ namespace DucMinh.UnityMcp.Editor
                     Endpoint = endpoint,
                     InstanceId = instanceId
                 });
+                return true;
             }
             catch
             {
                 // The PID may be gone, reused, or inaccessible. Never touch an unverified
                 // process; simply discard the stale ownership record.
                 ClearPersistedGateway();
+                return false;
             }
         }
 

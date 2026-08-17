@@ -780,6 +780,15 @@ namespace DucMinh.UnityMcp.Editor
             return new UnityMcpJobHandle { jobId = job.jobId, jobType = job.jobType, status = job.status, progress = job.progress, progressMessage = job.progressMessage };
         }
 
+        /// <summary>Reattaches an Editor operation to a job restored after a domain reload.</summary>
+        public static void Resume(UnityMcpJob job, IEditorWorkflowOperation operation)
+        {
+            if (job == null) throw new ArgumentNullException(nameof(job));
+            if (operation == null) throw new ArgumentNullException(nameof(operation));
+            Operations[job.jobId] = operation;
+            if (!hooked) { EditorApplication.update += Tick; hooked = true; }
+        }
+
         public static void Succeed(UnityMcpJob job, object result)
         {
             UnityMcpJobStore.Shared.Complete(job, UnityMcpResult.Success(result));
@@ -796,7 +805,12 @@ namespace DucMinh.UnityMcp.Editor
             {
                 UnityMcpJob job;
                 if (!UnityMcpJobStore.Shared.TryGet(pair.Key, out job)) { Operations.Remove(pair.Key); continue; }
-                if (string.Equals(job.status, "cancelled", StringComparison.Ordinal) && !pair.Value.DrainWhenCancelled) { Operations.Remove(pair.Key); continue; }
+                if (string.Equals(job.status, "cancelled", StringComparison.Ordinal) && !pair.Value.DrainWhenCancelled)
+                {
+                    if (string.Equals(job.jobType, "play-mode", StringComparison.Ordinal)) PlayModeTransitionRecovery.Clear(job.jobId);
+                    Operations.Remove(pair.Key);
+                    continue;
+                }
                 UnityMcpJobStore.Shared.Start(job, "Running Unity Editor workflow.");
                 try
                 {

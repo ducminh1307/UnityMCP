@@ -45,6 +45,25 @@ namespace DucMinh.UnityMcp
             return job;
         }
 
+        /// <summary>Restores an Editor-persisted job after a Unity domain reload.</summary>
+        public UnityMcpJob Restore(string jobId, string jobType, string status, float progress, string progressMessage, string createdUtc, string startedUtc)
+        {
+            if (string.IsNullOrWhiteSpace(jobId)) throw new ArgumentException("jobId is required.");
+            var job = new UnityMcpJob
+            {
+                jobId = jobId,
+                jobType = string.IsNullOrWhiteSpace(jobType) ? "operation" : jobType,
+                status = string.IsNullOrWhiteSpace(status) ? "queued" : status,
+                progress = Math.Max(0f, Math.Min(1f, progress)),
+                progressMessage = progressMessage,
+                createdUtc = string.IsNullOrWhiteSpace(createdUtc) ? DateTime.UtcNow.ToString("O") : createdUtc,
+                startedUtc = startedUtc,
+                cancellation = new CancellationTokenSource()
+            };
+            jobs[jobId] = job;
+            return job;
+        }
+
         public void Start(UnityMcpJob job, string message = null)
         {
             if (job == null || job.status == "cancelled" || IsTerminal(job.status)) return;
