@@ -164,7 +164,10 @@ async def test_streamable_http_gateway_exits_when_watched_parent_exits(tmp_path)
         "buildId": "parent-build",
         "token": UnityHandler.token,
     }
-    (tmp_path / "parent-instance.json").write_text(json.dumps(descriptor), encoding="utf-8")
+    descriptor_path = tmp_path / "parent-instance.json"
+    descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
+    if os.name != "nt":
+        descriptor_path.chmod(0o600)
     parent = await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",
