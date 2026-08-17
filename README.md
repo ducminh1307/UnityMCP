@@ -182,6 +182,8 @@ Player builds never start the bridge.
 - [Security](docs/security.md) — trust boundaries, tokens, and local
   configuration.
 - [Custom tools](docs/custom-tools.md) — typed project-specific C# tools.
+- [Tool reference](docs/tools.md) — human-readable index of all built-in tools,
+  grouped by category with scope, safety, availability, and dependencies.
 - [Roadmap](docs/roadmap.md) — planned scope and constraints.
 - [Tool catalog](docs/tool-catalog.json) — canonical machine-readable catalog.
 
@@ -189,6 +191,7 @@ Validate the catalog from the repository root with:
 
 ```console
 python tools/validate_catalog.py
+python tools/generate_tool_reference.py --check
 ```
 
 ## Repository layout

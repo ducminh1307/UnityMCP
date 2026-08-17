@@ -20,8 +20,10 @@ jobs:
           cache-dependency-path: server/pyproject.toml
       - name: Install gateway and test dependencies
         run: python -m pip install -e './server[dev]'
-      - name: Validate the 187-tool catalog and 48 C# registrations
+      - name: Validate the tool catalog and C# registrations
         run: python tools/validate_catalog.py
+      - name: Verify the generated tool reference
+        run: python tools/generate_tool_reference.py --check
       - name: Lint the Python gateway
         run: ruff check server
       - name: Test the Python gateway
