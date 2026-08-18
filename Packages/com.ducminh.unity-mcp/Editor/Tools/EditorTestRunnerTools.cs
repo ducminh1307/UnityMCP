@@ -30,6 +30,7 @@ namespace DucMinh.UnityMcp.Editor
     {
         public bool dryRun;
         public bool accepted;
+        public bool failed;
         public string jobId;
         public string runnerId;
         public string mode;
@@ -39,9 +40,11 @@ namespace DucMinh.UnityMcp.Editor
         public List<string> unknownTests = new List<string>();
         public string selectionHash;
         public string summary;
+        public TestRunErrorOutput error;
     }
 
     [Serializable] public sealed class TestRunResolvedTest { public string id; public string fullName; public List<string> categories = new List<string>(); public bool @explicit; }
+    [Serializable] public sealed class TestRunErrorOutput { public string code; public string message; public List<string> unknownTests = new List<string>(); public List<string> explicitTests = new List<string>(); }
 
     [Serializable]
     public sealed class TestCaseResultOutput
@@ -94,7 +97,9 @@ namespace DucMinh.UnityMcp.Editor
         [UnityMcpTool("test-run", Description = "Start one filtered Unity Test Framework run; dry-run unless apply is true.", Category = "test", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, SupportsCancellation = true, ReturnsJob = true, TimeoutMs = 600000)]
         public static TestRunStartOutput TestRun(TestRunInput input, UnityMcpContext context)
         {
-            var selection = EditorTestCatalog.Resolve(input);
+            TestSelection selection;
+            try { selection = EditorTestCatalog.Resolve(input); }
+            catch (UnityMcpValidationException failure) { return StartFailure(null, null, null, failure.ErrorCode, failure.Message, failure.StructuredContent as TestValidationError); }
             var filter = new Filter { testMode = ParseMode(selection.mode), testNames = selection.tests.Select(test => test.fullName).ToArray() };
             if (context.DryRun)
             {
@@ -104,7 +109,7 @@ namespace DucMinh.UnityMcp.Editor
             lock (Gate)
             {
                 if (active != null && !active.IsFinished)
-                    throw new UnityMcpValidationException("TEST_RUN_ALREADY_ACTIVE", "A UnityMCP test run is already active. Read or cancel that job before starting another run.");
+                    return StartFailure(active.job.jobId, active.runnerId, selection, "TEST_RUN_ALREADY_ACTIVE", "A UnityMCP test run is already active. Read or cancel that job before starting another run.");
                 var job = UnityMcpJobStore.Shared.Create("test");
                 var api = ScriptableObject.CreateInstance<TestRunnerApi>();
                 var run = new ActiveTestRun(job, api);
@@ -128,13 +133,18 @@ namespace DucMinh.UnityMcp.Editor
                         summary = "Unity Test Framework run queued."
                     };
                 }
-                catch
+                catch (Exception exception)
                 {
                     if (ReferenceEquals(active, run)) active = null;
-                    UnityMcpJobStore.Shared.Fail(job, "The Unity Test Framework run could not be started. See the local Unity Console for details.");
+                    var validation = exception as UnityMcpValidationException;
+                    var code = validation == null ? "TEST_RUN_START_FAILED" : validation.ErrorCode;
+                    var message = validation == null
+                        ? "The Unity Test Framework run could not be started. See the local Unity Console for details."
+                        : validation.Message;
+                    UnityMcpJobStore.Shared.Fail(job, message);
                     TestRunRecovery.Clear(job.jobId);
                     run.Dispose();
-                    throw;
+                    return StartFailure(job.jobId, run.runnerId, selection, code, message, validation?.StructuredContent as TestValidationError);
                 }
             }
         }
@@ -205,6 +215,29 @@ namespace DucMinh.UnityMcp.Editor
             var output = new TestRunStartOutput { dryRun = dryRun, mode = selection.mode, resolvedCount = selection.tests.Count, explicitCount = selection.tests.Count(test => test.explicitTest), selectionHash = selection.hash, summary = summary };
             output.resolvedTests = selection.tests.Select(test => new TestRunResolvedTest { id = test.id, fullName = test.fullName, categories = test.categories, @explicit = test.explicitTest }).ToList();
             return output;
+        }
+
+        private static TestRunStartOutput StartFailure(string jobId, string runnerId, TestSelection selection, string code, string message, TestValidationError details = null)
+        {
+            return new TestRunStartOutput
+            {
+                accepted = false,
+                failed = true,
+                jobId = jobId,
+                runnerId = runnerId,
+                mode = selection?.mode,
+                resolvedCount = selection?.tests?.Count ?? 0,
+                explicitCount = selection?.tests?.Count(test => test.explicitTest) ?? 0,
+                selectionHash = selection?.hash,
+                summary = message,
+                error = new TestRunErrorOutput
+                {
+                    code = string.IsNullOrWhiteSpace(code) ? "TEST_RUN_FAILED" : code,
+                    message = string.IsNullOrWhiteSpace(message) ? "UnityMCP could not start the requested test run." : message,
+                    unknownTests = details?.unknownTests ?? new List<string>(),
+                    explicitTests = details?.explicitTests ?? new List<string>()
+                }
+            };
         }
 
         private static TestMode ParseMode(string mode)
