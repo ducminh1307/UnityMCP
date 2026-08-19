@@ -16,7 +16,7 @@ namespace DucMinh.UnityMcp
     [Serializable] public sealed class SetTimeScaleInput { public float timeScale = 1f; public float? fixedDeltaTime; public bool apply; }
     [Serializable] public sealed class SceneInfo { public int buildIndex; public string name; public string path; public bool isLoaded; public bool isDirty; public int rootCount; public bool isActive; }
     [Serializable] public sealed class SceneListOutput { public List<SceneInfo> scenes = new List<SceneInfo>(); }
-    [Serializable] public sealed class SceneHierarchyInput { public string scene; public int maxDepth = 12; public bool includeInactive = true; public string nameContains; public string componentType; public bool includeHidden; public int rootOffset; public int rootLimit = 100; public string snapshotId; public string compareToSnapshot; }
+    [Serializable] public sealed class SceneHierarchyInput { public string scene; public string path; public int maxDepth = 12; public bool includeInactive = true; public bool includeComponents = true; public string nameContains; public string componentType; public bool includeHidden; public int rootOffset; public int rootLimit = 100; public string snapshotId; public string compareToSnapshot; }
     [Serializable] public sealed class GameObjectNode { public int instanceId; public string name; public string path; public bool activeSelf; public bool activeInHierarchy; public string tag; public int layer; public int hideFlags; public List<string> componentTypes = new List<string>(); public List<GameObjectNode> children = new List<GameObjectNode>(); public bool truncated; }
     [Serializable] public sealed class SceneHierarchyDiff { public int added; public int removed; public int changed; public List<string> addedPaths = new List<string>(); public List<string> removedPaths = new List<string>(); public List<string> changedPaths = new List<string>(); public bool truncated; }
     [Serializable] public sealed class SceneHierarchyOutput { public List<GameObjectNode> roots = new List<GameObjectNode>(); public int totalRoots; public bool truncated; public string snapshotId; public SceneHierarchyDiff diff; }
@@ -100,10 +100,13 @@ namespace DucMinh.UnityMcp
         [UnityMcpTool("scene-hierarchy", Description = "Read a loaded scene hierarchy.", Category = "scene", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.SafeRead, DefaultEnabled = true)]
         public static SceneHierarchyOutput SceneHierarchy(SceneHierarchyInput input)
         {
-            var scene = FindScene(input.scene);
+            var pathRoot = string.IsNullOrWhiteSpace(input.path) ? null : RequireGameObject(null, input.path);
+            var scene = string.IsNullOrWhiteSpace(input.scene) && pathRoot != null ? pathRoot.scene : FindScene(input.scene);
             if (!scene.IsValid() || !scene.isLoaded) throw new ArgumentException("Scene was not found or is not loaded.");
+            if (pathRoot != null && pathRoot.scene != scene) throw new ArgumentException("The hierarchy path does not belong to the selected scene.");
             var nodes = new List<GameObjectNode>();
-            foreach (var root in scene.GetRootGameObjects())
+            var roots = pathRoot == null ? scene.GetRootGameObjects() : new[] { pathRoot };
+            foreach (var root in roots)
             {
                 if (!input.includeInactive && !root.activeInHierarchy) continue;
                 if (!input.includeHidden && root.hideFlags != HideFlags.None) continue;
@@ -118,6 +121,8 @@ namespace DucMinh.UnityMcp
             var current = Snapshot(nodes);
             if (!string.IsNullOrWhiteSpace(input.compareToSnapshot) && HierarchySnapshots.TryGetValue(input.compareToSnapshot, out var prior)) output.diff = Diff(prior, current);
             if (!string.IsNullOrWhiteSpace(input.snapshotId)) { HierarchySnapshots[input.snapshotId] = current; output.snapshotId = input.snapshotId; }
+            if (!input.includeComponents)
+                foreach (var root in output.roots) ClearComponentTypes(root);
             return output;
         }
 
@@ -439,6 +444,12 @@ namespace DucMinh.UnityMcp
             var values = new Dictionary<int, string>();
             foreach (var root in roots) AddSnapshot(root, values);
             return values;
+        }
+
+        private static void ClearComponentTypes(GameObjectNode node)
+        {
+            node.componentTypes.Clear();
+            foreach (var child in node.children) ClearComponentTypes(child);
         }
 
         private static void AddSnapshot(GameObjectNode node, Dictionary<int, string> values)

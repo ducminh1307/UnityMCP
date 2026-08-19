@@ -47,7 +47,7 @@ namespace DucMinh.UnityMcp.Editor
 
     [Serializable] public sealed class MethodFindInput { public string allowlistPath; public string type; }
     [Serializable] public sealed class MethodInfoOutput { public string name; public string returnType; public List<string> parameterTypes = new List<string>(); }
-    [Serializable] public sealed class MethodFindOutput { public string type; public List<MethodInfoOutput> methods = new List<MethodInfoOutput>(); }
+    [Serializable] public sealed class MethodFindOutput { public string allowlistPath; public string type; public List<MethodInfoOutput> methods = new List<MethodInfoOutput>(); }
     [Serializable] public sealed class MethodCallInput { public string allowlistPath; public string type; public int? instanceId; public string assetPath; public string method; public List<string> argumentsJson = new List<string>(); public bool apply; }
     [Serializable] public sealed class MethodCallOutput { public bool dryRun; public bool invoked; public int instanceId; public string type; public string method; public string returnType; public string returnJson; public string summary; }
 
@@ -146,11 +146,11 @@ namespace DucMinh.UnityMcp.Editor
             };
         }
 
-        [UnityMcpTool("method-find", Description = "List public instance methods explicitly permitted by a local UnityMCP reflection allowlist.", Category = "reflection", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
+        [UnityMcpTool("method-find", Description = "List public instance methods explicitly permitted by a local UnityMCP reflection allowlist. When allowlistPath is omitted, discover the unique project allowlist containing the requested type.", Category = "reflection", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
         public static MethodFindOutput MethodFind(MethodFindInput input)
         {
-            var rule = RequireReflectionRule(input.allowlistPath, input.type);
-            var output = new MethodFindOutput { type = rule.type.FullName };
+            var rule = RequireReflectionRule(input.allowlistPath, input.type, true);
+            var output = new MethodFindOutput { allowlistPath = rule.allowlistPath, type = rule.type.FullName };
             var signatures = new HashSet<string>(StringComparer.Ordinal);
             foreach (var methodRule in rule.rule.callableMethods ?? new List<UnityMcpReflectionMethodRule>())
             {
@@ -367,6 +367,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private sealed class ReflectionRuleResolution
         {
+            public string allowlistPath;
             public UnityMcpReflectionTypeRule rule;
             public Type type;
         }
@@ -404,22 +405,53 @@ namespace DucMinh.UnityMcp.Editor
             return asset;
         }
 
-        private static ReflectionRuleResolution RequireReflectionRule(string allowlistPath, string requestedType)
+        private static ReflectionRuleResolution RequireReflectionRule(string allowlistPath, string requestedType, bool discoverWhenMissing = false)
         {
             if (string.IsNullOrWhiteSpace(requestedType)) throw new ArgumentException("type is required and must be explicitly allowlisted.");
-            var allowlist = LoadProjectAsset<UnityMcpReflectionAllowlist>(allowlistPath, "reflection allowlist");
             var requested = ResolveType(requestedType);
             if (requested == null) throw new ArgumentException("type could not be resolved.");
+            if (discoverWhenMissing && string.IsNullOrWhiteSpace(allowlistPath)) return DiscoverReflectionRule(requested);
+
+            var normalizedPath = NormalizeAssetPath(allowlistPath, ".asset");
+            var allowlist = AssetDatabase.LoadAssetAtPath<UnityMcpReflectionAllowlist>(normalizedPath);
+            if (allowlist == null) throw new ArgumentException("The supplied reflection allowlist asset was not found or has the wrong type.");
             var matches = new List<ReflectionRuleResolution>();
             foreach (var rule in allowlist.types ?? new List<UnityMcpReflectionTypeRule>())
             {
                 var type = ResolveType(rule?.typeName);
                 if (type == null || type != requested) continue;
                 ValidateReflectionTargetType(type);
-                matches.Add(new ReflectionRuleResolution { rule = rule, type = type });
+                matches.Add(new ReflectionRuleResolution { allowlistPath = normalizedPath, rule = rule, type = type });
             }
             if (matches.Count == 0) throw new ArgumentException("The requested type is not in the supplied local UnityMCP reflection allowlist.");
             if (matches.Count > 1) throw new ArgumentException("The supplied local UnityMCP reflection allowlist contains duplicate type rules.");
+            return matches[0];
+        }
+
+        private static ReflectionRuleResolution DiscoverReflectionRule(Type requestedType)
+        {
+            var matches = new List<ReflectionRuleResolution>();
+            var paths = AssetDatabase.FindAssets("t:UnityMcpReflectionAllowlist")
+                .Select(AssetDatabase.GUIDToAssetPath)
+                .Where(path => path.StartsWith("Assets/", StringComparison.Ordinal))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+            foreach (var path in paths)
+            {
+                var allowlist = AssetDatabase.LoadAssetAtPath<UnityMcpReflectionAllowlist>(path);
+                if (allowlist == null) continue;
+                foreach (var rule in allowlist.types ?? new List<UnityMcpReflectionTypeRule>())
+                {
+                    var type = ResolveType(rule?.typeName);
+                    if (type == null || type != requestedType) continue;
+                    ValidateReflectionTargetType(type);
+                    matches.Add(new ReflectionRuleResolution { allowlistPath = path, rule = rule, type = type });
+                }
+            }
+            if (matches.Count == 0)
+                throw new ArgumentException("No project UnityMCP reflection allowlist contains the requested type. Create one under Assets or supply allowlistPath explicitly.");
+            if (matches.Count > 1)
+                throw new ArgumentException("Multiple project UnityMCP reflection allowlists contain the requested type. Supply allowlistPath explicitly.");
             return matches[0];
         }
 

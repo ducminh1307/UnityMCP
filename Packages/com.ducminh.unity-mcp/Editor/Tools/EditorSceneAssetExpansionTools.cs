@@ -321,10 +321,10 @@ namespace DucMinh.UnityMcp.Editor
             return Change(context, "Unpack prefab instance '" + HierarchyPath(root) + "' " + (input.completely ? "completely." : "one level."), root.GetInstanceID());
         }
 
-        [UnityMcpTool("scriptableobject-create", Description = "Create an asset from a project type explicitly listed in UnityMCP's ScriptableObject allowlist; dry-run unless apply is true.", Category = "prefab", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
+        [UnityMcpTool("scriptableobject-create", Description = "Create an asset from a concrete ScriptableObject type; dry-run unless apply is true.", Category = "prefab", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
         public static ScriptableObjectCreateOutput ScriptableObjectCreate(ScriptableObjectCreateInput input, UnityMcpContext context)
         {
-            var type = RequireAllowedScriptableObjectType(input.type);
+            var type = RequireCreatableScriptableObjectType(input.type);
             var path = NormalizeAssetPath(input.path, ".asset");
             if (AssetDatabase.LoadMainAssetAtPath(path) != null || File.Exists(ToFullPath(path)))
                 throw new InvalidOperationException("The destination asset already exists.");
@@ -357,26 +357,27 @@ namespace DucMinh.UnityMcp.Editor
             };
         }
 
-        [UnityMcpTool("scriptableobject-get", Description = "Read supported public serialized fields from an allowlisted ScriptableObject asset.", Category = "prefab", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
+        [UnityMcpTool("scriptableobject-get", Description = "Read supported public serialized fields from a ScriptableObject asset.", Category = "prefab", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
         public static ScriptableObjectGetOutput ScriptableObjectGet(ScriptableObjectGetInput input)
         {
             var path = RequireExistingImportedAsset(input.path);
             var asset = AssetDatabase.LoadAssetAtPath<ScriptableObject>(path);
             if (asset == null) throw new ArgumentException("Path is not a ScriptableObject asset.");
-            var type = RequireAllowedScriptableObjectType(asset.GetType().FullName);
+            var type = asset.GetType();
             var output = new ScriptableObjectGetOutput { path = path, type = type.FullName, name = asset.name };
             foreach (var field in SupportedScriptableFields(type))
                 output.fields.Add(new ScriptableObjectFieldInfo { name = field.Name, type = FriendlyTypeName(field.FieldType), valueJson = SerializeScriptableValue(field.GetValue(asset), field.FieldType) });
             return output;
         }
 
-        [UnityMcpTool("scriptableobject-set", Description = "Set supported public serialized fields on an allowlisted ScriptableObject; dry-run unless apply is true.", Category = "prefab", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
+        [UnityMcpTool("scriptableobject-set", Description = "Set supported public serialized fields on a ScriptableObject asset; dry-run unless apply is true.", Category = "prefab", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
         public static ChangeOutput ScriptableObjectSet(ScriptableObjectSetInput input, UnityMcpContext context)
         {
             var path = RequireExistingImportedAsset(input.path);
             var asset = AssetDatabase.LoadAssetAtPath<ScriptableObject>(path);
             if (asset == null) throw new ArgumentException("Path is not a ScriptableObject asset.");
-            var type = RequireAllowedScriptableObjectType(asset.GetType().FullName);
+            var type = asset.GetType();
+            RequireMutableScriptableObjectType(type);
             if (input.fields == null || input.fields.Count == 0) throw new ArgumentException("Provide at least one field update.");
             var allowedFields = SupportedScriptableFields(type).ToDictionary(field => field.Name, StringComparer.Ordinal);
             var updates = new List<ScriptableObjectFieldUpdate>();
@@ -386,7 +387,7 @@ namespace DucMinh.UnityMcp.Editor
                 if (entry == null || string.IsNullOrWhiteSpace(entry.name) || !names.Add(entry.name))
                     throw new ArgumentException("Each field update must have a unique supported name.");
                 if (!allowedFields.TryGetValue(entry.name, out var field))
-                    throw new ArgumentException("Field is not supported for this allowlisted ScriptableObject: " + entry.name);
+                    throw new ArgumentException("Field is not a supported public serialized field on this ScriptableObject: " + entry.name);
                 updates.Add(new ScriptableObjectFieldUpdate { field = field, value = ParseScriptableValue(entry.valueJson, field.FieldType) });
             }
 
@@ -623,28 +624,25 @@ namespace DucMinh.UnityMcp.Editor
             }
         }
 
-        private static Type RequireAllowedScriptableObjectType(string requestedType)
+        private static Type RequireCreatableScriptableObjectType(string requestedType)
         {
-            if (string.IsNullOrWhiteSpace(requestedType)) throw new ArgumentException("type is required and must be explicitly allowlisted.");
-            foreach (var type in AllowedScriptableObjectTypes())
-                if (string.Equals(type.FullName, requestedType, StringComparison.Ordinal) || string.Equals(type.AssemblyQualifiedName, requestedType, StringComparison.Ordinal)) return type;
-            throw new ArgumentException("The ScriptableObject type is not in the local UnityMCP allowlist.");
+            if (string.IsNullOrWhiteSpace(requestedType)) throw new ArgumentException("type is required and must be a full or assembly-qualified ScriptableObject type name.");
+            var type = ResolveType(requestedType.Trim());
+            if (type == null) throw new ArgumentException("The requested ScriptableObject type could not be resolved. Use its full or assembly-qualified type name.");
+            if (type == typeof(ScriptableObject) || !typeof(ScriptableObject).IsAssignableFrom(type))
+                throw new ArgumentException("The requested type must derive from ScriptableObject and cannot be the ScriptableObject base type.");
+            if (type.IsAbstract || type.ContainsGenericParameters)
+                throw new ArgumentException("The requested ScriptableObject type must be concrete and non-generic.");
+            RequireMutableScriptableObjectType(type);
+            return type;
         }
 
-        private static IEnumerable<Type> AllowedScriptableObjectTypes()
+        private static void RequireMutableScriptableObjectType(Type type)
         {
-            var result = new HashSet<Type>();
-            foreach (var guid in AssetDatabase.FindAssets("t:UnityMcpScriptableObjectAllowlist"))
-            {
-                var allowlist = AssetDatabase.LoadAssetAtPath<UnityMcpScriptableObjectAllowlist>(AssetDatabase.GUIDToAssetPath(guid));
-                if (allowlist == null) continue;
-                foreach (var name in allowlist.allowedTypeNames ?? new List<string>())
-                {
-                    var type = ResolveType(name);
-                    if (type != null && type != typeof(UnityMcpScriptableObjectAllowlist) && !type.IsAbstract && typeof(ScriptableObject).IsAssignableFrom(type)) result.Add(type);
-                }
-            }
-            return result;
+            var assemblyName = type.Assembly.GetName().Name ?? string.Empty;
+            if (assemblyName.Equals("DucMinh.UnityMcp.Runtime", StringComparison.Ordinal) ||
+                assemblyName.Equals("DucMinh.UnityMcp.Editor", StringComparison.Ordinal))
+                throw new ArgumentException("UnityMCP's own profile and permission assets cannot be created or modified through generic ScriptableObject tools.");
         }
 
         private static Type ResolveType(string name)

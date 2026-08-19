@@ -191,12 +191,11 @@ namespace DucMinh.UnityMcp.Editor
             return Change(context, "Updated active-scene render settings.");
         }
 
-        [UnityMcpTool("screenshot-camera", Description = "Capture a loaded Camera as a PNG image.", Category = "visual", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
+        [UnityMcpTool("screenshot-camera", Description = "Capture a loaded Camera as a PNG image using the Camera component or its GameObject instance ID.", Category = "visual", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
         public static UnityMcpResult ScreenshotCamera(ScreenshotCameraInput input)
         {
             if (!input.instanceId.HasValue) throw new ArgumentException("instanceId is required.");
-            var camera = EditorUtility.EntityIdToObject((EntityId)input.instanceId.Value) as Camera;
-            if (camera == null || !camera.gameObject.scene.IsValid()) throw new ArgumentException("instanceId must identify a loaded Camera.");
+            var camera = ResolveLoadedCamera(input.instanceId.Value, "instanceId must identify a loaded Camera component or a loaded scene GameObject with a Camera component.");
             return CaptureCamera(camera, input.width, input.height, input.includeAlpha, out _);
         }
 
@@ -216,13 +215,20 @@ namespace DucMinh.UnityMcp.Editor
             var content = new List<UnityMcpContent>();
             foreach (var id in input.cameraInstanceIds.Distinct())
             {
-                var camera = EditorUtility.EntityIdToObject((EntityId)id) as Camera;
-                if (camera == null || !camera.gameObject.scene.IsValid()) throw new ArgumentException("One or more cameraInstanceIds are not loaded Cameras.");
+                var camera = ResolveLoadedCamera(id, "One or more cameraInstanceIds do not identify loaded Camera components or loaded scene GameObjects with Camera components.");
                 var result = CaptureCamera(camera, input.width, input.height, input.includeAlpha, out var info);
                 output.screenshots.Add(info);
                 content.AddRange(result.content);
             }
             return new UnityMcpResult { content = content, structuredContent = output };
+        }
+
+        internal static Camera ResolveLoadedCamera(int instanceId, string errorMessage)
+        {
+            var target = EditorUtility.EntityIdToObject((EntityId)instanceId);
+            var camera = target as Camera ?? (target as GameObject)?.GetComponent<Camera>();
+            if (camera == null || !camera.gameObject.scene.IsValid()) throw new ArgumentException(errorMessage);
+            return camera;
         }
 
         private static UnityMcpResult CaptureCamera(Camera camera, int width, int height, bool includeAlpha, out ScreenshotInfo info)

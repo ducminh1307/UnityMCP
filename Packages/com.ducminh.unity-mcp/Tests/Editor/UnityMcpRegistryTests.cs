@@ -85,6 +85,45 @@ namespace DucMinh.UnityMcp.Tests
         }
 
         [Test]
+        public void SceneHierarchySchema_AcceptsPathAndIncludeComponents()
+        {
+            var method = typeof(RuntimeCoreTools).GetMethod(nameof(RuntimeCoreTools.SceneHierarchy));
+            var schema = UnityMcpSchemaGenerator.InputFor(method, false);
+            var properties = JObject.FromObject(schema["properties"]);
+
+            Assert.That(properties["path"]?["type"]?.Value<string>(), Is.EqualTo("string"));
+            Assert.That(properties["includeComponents"]?["type"]?.Value<string>(), Is.EqualTo("boolean"));
+        }
+
+        [Test]
+        public void SceneHierarchy_PathScopesResultAndCanOmitComponents()
+        {
+            var root = new GameObject("UnityMcpHierarchyRoot");
+            var child = new GameObject("UnityMcpHierarchyChild");
+            child.transform.SetParent(root.transform, false);
+            try
+            {
+                var output = RuntimeCoreTools.SceneHierarchy(new SceneHierarchyInput
+                {
+                    path = root.scene.name + ":/" + root.name,
+                    includeComponents = false
+                });
+
+                Assert.That(output.totalRoots, Is.EqualTo(1));
+                Assert.That(output.roots, Has.Count.EqualTo(1));
+                Assert.That(output.roots[0].instanceId, Is.EqualTo(root.GetInstanceID()));
+                Assert.That(output.roots[0].componentTypes, Is.Empty);
+                Assert.That(output.roots[0].children, Has.Count.EqualTo(1));
+                Assert.That(output.roots[0].children[0].instanceId, Is.EqualTo(child.GetInstanceID()));
+                Assert.That(output.roots[0].children[0].componentTypes, Is.Empty);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
         public void ProjectTool_IsDisabledRegardlessOfAttributeDefault()
         {
             var method = GetType().GetMethod(nameof(ProjectMutation), BindingFlags.Static | BindingFlags.Public);

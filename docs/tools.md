@@ -140,7 +140,7 @@ appear in this built-in catalog; use `custom-tool-list` to inspect them.
 | `component-set-properties` | implemented | editor, runtime | write | No | `unity-core` | Dry-run or atomically set several supported component properties. |
 | `object-get` | implemented | editor | safe-read | No | `unity-editor` | Read an allowlisted reflected Unity object projection. |
 | `object-set` | implemented | editor | unsafe | No | `unity-editor` | Set allowlisted reflected Unity object members. |
-| `method-find` | implemented | editor | safe-read | No | `unity-editor` | Find allowlisted reflected methods and their parameter schemas. |
+| `method-find` | implemented | editor | safe-read | No | `unity-editor` | Find allowlisted reflected methods and their parameter schemas, auto-discovering a unique matching project allowlist when its path is omitted. |
 | `method-call` | implemented | editor | unsafe | No | `unity-editor` | Invoke an explicitly allowlisted reflected method. |
 | `type-schema` | implemented | editor, runtime | safe-read | No | `unity-core` | Describe a supported CLR or Unity value type as JSON Schema. |
 
@@ -179,9 +179,9 @@ appear in this built-in catalog; use `custom-tool-list` to inspect them.
 | `prefab-apply` | implemented | editor | write | No | `unity-editor` | Dry-run or apply selected instance overrides to a prefab asset. |
 | `prefab-revert` | implemented | editor | destructive | No | `unity-editor` | Dry-run or revert selected prefab instance overrides. |
 | `prefab-unpack` | implemented | editor | destructive | No | `unity-editor` | Dry-run or unpack a prefab instance completely or one level. |
-| `scriptableobject-create` | implemented | editor | write | No | `unity-editor` | Create an asset from an allowlisted ScriptableObject type. |
-| `scriptableobject-get` | implemented | editor | safe-read | No | `unity-editor` | Read supported serialized ScriptableObject fields. |
-| `scriptableobject-set` | implemented | editor | write | No | `unity-editor` | Dry-run or update supported ScriptableObject fields. |
+| `scriptableobject-create` | implemented | editor | write | No | `unity-editor` | Create an asset from a concrete ScriptableObject type. |
+| `scriptableobject-get` | implemented | editor | safe-read | No | `unity-editor` | Read supported serialized fields from any ScriptableObject asset. |
+| `scriptableobject-set` | implemented | editor | write | No | `unity-editor` | Dry-run or update supported fields on a ScriptableObject asset. |
 
 <a id="scripts-compilation"></a>
 
