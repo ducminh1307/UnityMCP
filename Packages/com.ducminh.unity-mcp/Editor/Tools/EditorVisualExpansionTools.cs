@@ -29,6 +29,14 @@ namespace DucMinh.UnityMcp.Editor
     /// <summary>Editor-only assets, rendering and camera screenshot tools with project-contained writes.</summary>
     public static class EditorVisualExpansionTools
     {
+        // Keep the conservative worst-case base64 payload, JSON envelope, and metadata below
+        // UnityMcpHttpServer's 16 MiB response limit before any camera is rendered.
+        private const long ScreenshotResponseLimitBytes = 16L * 1024L * 1024L;
+        private const long ScreenshotJsonReserveBytes = 512L * 1024L;
+        private const long PngOverheadReservePerImageBytes = 64L * 1024L;
+        private const long MetadataReservePerImageBytes = 4096L;
+        private const int MaxScreenshotCameraNameCharacters = 256;
+
         [UnityMcpTool("material-create", Description = "Create a Material asset with a named Shader; dry-run unless apply is true.", Category = "material", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
         public static ChangeOutput MaterialCreate(MaterialCreateInput input, UnityMcpContext context)
         {
@@ -195,6 +203,7 @@ namespace DucMinh.UnityMcp.Editor
         public static UnityMcpResult ScreenshotCamera(ScreenshotCameraInput input)
         {
             if (!input.instanceId.HasValue) throw new ArgumentException("instanceId is required.");
+            ValidateScreenshotCaptureBudget(1, input.width, input.height);
             var camera = ResolveLoadedCamera(input.instanceId.Value, "instanceId must identify a loaded Camera component or a loaded scene GameObject with a Camera component.");
             return CaptureCamera(camera, input.width, input.height, input.includeAlpha, out _);
         }
@@ -204,6 +213,7 @@ namespace DucMinh.UnityMcp.Editor
         {
             var sceneView = SceneView.lastActiveSceneView;
             if (sceneView == null || sceneView.camera == null) throw new InvalidOperationException("Open a Scene View before capturing it.");
+            ValidateScreenshotCaptureBudget(1, input.width, input.height);
             return CaptureCamera(sceneView.camera, input.width, input.height, input.includeAlpha, out _);
         }
 
@@ -211,11 +221,13 @@ namespace DucMinh.UnityMcp.Editor
         public static UnityMcpResult ScreenshotMultiview(ScreenshotMultiViewInput input)
         {
             if (input.cameraInstanceIds == null || input.cameraInstanceIds.Count == 0 || input.cameraInstanceIds.Count > 8) throw new ArgumentException("cameraInstanceIds must contain between 1 and 8 cameras.");
+            var cameraIds = input.cameraInstanceIds.Distinct().ToArray();
+            ValidateScreenshotCaptureBudget(cameraIds.Length, input.width, input.height);
+            var cameras = cameraIds.Select(id => ResolveLoadedCamera(id, "One or more cameraInstanceIds do not identify loaded Camera components or loaded scene GameObjects with Camera components.")).ToArray();
             var output = new ScreenshotMultiViewOutput();
             var content = new List<UnityMcpContent>();
-            foreach (var id in input.cameraInstanceIds.Distinct())
+            foreach (var camera in cameras)
             {
-                var camera = ResolveLoadedCamera(id, "One or more cameraInstanceIds do not identify loaded Camera components or loaded scene GameObjects with Camera components.");
                 var result = CaptureCamera(camera, input.width, input.height, input.includeAlpha, out var info);
                 output.screenshots.Add(info);
                 content.AddRange(result.content);
@@ -229,6 +241,23 @@ namespace DucMinh.UnityMcp.Editor
             var camera = target as Camera ?? (target as GameObject)?.GetComponent<Camera>();
             if (camera == null || !camera.gameObject.scene.IsValid()) throw new ArgumentException(errorMessage);
             return camera;
+        }
+
+        internal static void ValidateScreenshotCaptureBudget(int cameraCount, int width, int height)
+        {
+            if (cameraCount < 1 || cameraCount > 8) throw new ArgumentOutOfRangeException(nameof(cameraCount), "cameraCount must be between 1 and 8.");
+            var clampedWidth = Mathf.Clamp(width, 16, 2048);
+            var clampedHeight = Mathf.Clamp(height, 16, 2048);
+            var pixelsPerImage = checked((long)clampedWidth * clampedHeight);
+
+            // A PNG scanline needs four color bytes per pixel plus one filter byte. Five bytes
+            // per pixel plus a fixed reserve safely covers uncompressed DEFLATE/PNG overhead.
+            var worstCasePngBytes = checked(pixelsPerImage * 5L + PngOverheadReservePerImageBytes);
+            var worstCaseBase64Bytes = checked(((worstCasePngBytes + 2L) / 3L) * 4L);
+            var estimatedResponseBytes = checked(
+                ScreenshotJsonReserveBytes + cameraCount * (worstCaseBase64Bytes + MetadataReservePerImageBytes));
+            if (estimatedResponseBytes > ScreenshotResponseLimitBytes)
+                throw new ArgumentException("The requested screenshot capture can exceed the 16 MiB encoded response budget; reduce camera count or dimensions.");
         }
 
         private static UnityMcpResult CaptureCamera(Camera camera, int width, int height, bool includeAlpha, out ScreenshotInfo info)
@@ -247,7 +276,9 @@ namespace DucMinh.UnityMcp.Editor
                 texture.ReadPixels(new Rect(0, 0, width, height), 0, 0);
                 texture.Apply(false, false);
                 var png = texture.EncodeToPNG();
-                info = new ScreenshotInfo { cameraInstanceId = camera.GetInstanceID(), cameraName = camera.name, width = width, height = height };
+                var cameraName = camera.name ?? string.Empty;
+                if (cameraName.Length > MaxScreenshotCameraNameCharacters) cameraName = cameraName.Substring(0, MaxScreenshotCameraNameCharacters);
+                info = new ScreenshotInfo { cameraInstanceId = camera.GetInstanceID(), cameraName = cameraName, width = width, height = height };
                 return new UnityMcpResult
                 {
                     content = new List<UnityMcpContent> { new UnityMcpContent { type = "image", data = Convert.ToBase64String(png), mimeType = "image/png" } },

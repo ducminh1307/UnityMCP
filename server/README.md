@@ -47,7 +47,9 @@ unity-mcp --transport streamable-http --instance <instance-id> --port 8765 --htt
 `--parent-pid` is deliberately limited to `streamable-http`; stdio gateways
 remain owned by the MCP client that launches them. Before discovering a Unity
 instance, the gateway verifies that the supplied PID is live. It checks again
-every 0.5 seconds and exits after the parent goes away.
+every 0.5 seconds and exits after three consecutive failed checks. Stateful HTTP
+sessions which receive no traffic for 30 minutes are removed from the server's
+session table.
 
 Once Uvicorn has bound the loopback port, the HTTP gateway emits exactly one
 machine-readable readiness line to **stderr** (never stdout):

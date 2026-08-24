@@ -29,7 +29,7 @@ namespace DucMinh.UnityMcp.Editor
     /// </summary>
     public static class EditorNavMeshBakeTools
     {
-        [UnityMcpTool("navmesh-bake", Description = "Bake one allowlisted NavMeshSurface component as an Editor job; dry-run unless apply is true.", Category = "physics-navigation", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Unsafe, SupportsDryRun = true, ReturnsJob = true, RequiredType = "Unity.AI.Navigation.NavMeshSurface", TimeoutMs = 600000)]
+        [UnityMcpTool("navmesh-bake", Description = "Bake one allowlisted NavMeshSurface component as an Editor job; dry-run unless apply is true. Cancellation is honored before the synchronous bake begins.", Category = "physics-navigation", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Unsafe, SupportsDryRun = true, SupportsCancellation = true, ReturnsJob = true, RequiredType = "Unity.AI.Navigation.NavMeshSurface", TimeoutMs = 600000)]
         public static NavMeshBakeOutput NavMeshBake(NavMeshBakeInput input, UnityMcpContext context)
         {
             var surface = RequireSurface(input.surfaceInstanceId, out var buildMethod);
@@ -43,7 +43,7 @@ namespace DucMinh.UnityMcp.Editor
                 };
             }
 
-            var handle = EditorWorkflowJobRunner.Start(new NavMeshBakeOperation(surface, buildMethod));
+            var handle = EditorWorkflowJobRunner.Start(new NavMeshBakeOperation(surface, buildMethod), "navmesh-bake", true);
             return new NavMeshBakeOutput
             {
                 accepted = true,

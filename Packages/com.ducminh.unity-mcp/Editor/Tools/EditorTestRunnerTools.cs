@@ -110,7 +110,7 @@ namespace DucMinh.UnityMcp.Editor
             {
                 if (active != null && !active.IsFinished)
                     return StartFailure(active.job.jobId, active.runnerId, selection, "TEST_RUN_ALREADY_ACTIVE", "A UnityMCP test run is already active. Read or cancel that job before starting another run.");
-                var job = UnityMcpJobStore.Shared.Create("test");
+                var job = UnityMcpJobStore.Shared.Create("test", true);
                 var api = ScriptableObject.CreateInstance<TestRunnerApi>();
                 var run = new ActiveTestRun(job, api);
                 try
@@ -434,7 +434,7 @@ namespace DucMinh.UnityMcp.Editor
             try { persisted = JsonConvert.DeserializeObject<PersistedTestRun>(raw); }
             catch { SessionState.EraseString(SessionKey); return; }
             if (persisted == null || string.IsNullOrWhiteSpace(persisted.jobId) || string.IsNullOrWhiteSpace(persisted.runnerId) || !DateTime.TryParse(persisted.deadlineUtc, out var deadlineUtc)) { SessionState.EraseString(SessionKey); return; }
-            var job = UnityMcpJobStore.Shared.Restore(persisted.jobId, "test", "running", persisted.progress, "Unity reloaded during PlayMode test; reconnecting Test Framework callbacks.", persisted.createdUtc, persisted.startedUtc);
+            var job = UnityMcpJobStore.Shared.Restore(persisted.jobId, "test", "running", persisted.progress, "Unity reloaded during PlayMode test; reconnecting Test Framework callbacks.", persisted.createdUtc, persisted.startedUtc, true);
             if (DateTime.UtcNow > deadlineUtc)
             {
                 UnityMcpJobStore.Shared.Fail(job, "Timed out waiting for the PlayMode test run to reconnect after the Unity domain reload.");

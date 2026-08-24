@@ -167,3 +167,33 @@ def test_service_wraps_primitive_unity_result_to_match_output_schema() -> None:
     )
 
     assert output.structured_content == {"result": 4}
+
+
+def test_service_percent_encodes_opaque_job_uri() -> None:
+    bridge = FakeBridge([descriptor()])
+    gateway = service(bridge)
+    parsed = gateway.registry._parse_registry(
+        {"registryRevision": "1", "tools": [descriptor()]}, '"1"', 1.0
+    ).tools[0]
+
+    output = gateway._normalize_tool_result(
+        parsed,
+        {"content": [], "structuredContent": {"echo": 4}, "isError": False, "jobId": "build?job#part"},
+    )
+
+    assert output.meta["com.ducminh.unity-mcp/jobUri"] == "unity://jobs/build%3Fjob%23part"
+
+
+@pytest.mark.parametrize("job_id", ["build/job", "build\\job", chr(0xD800)])
+def test_service_rejects_job_ids_that_cannot_round_trip_to_unity(job_id: str) -> None:
+    bridge = FakeBridge([descriptor()])
+    gateway = service(bridge)
+    parsed = gateway.registry._parse_registry(
+        {"registryRevision": "1", "tools": [descriptor()]}, '"1"', 1.0
+    ).tools[0]
+
+    with pytest.raises(BridgeError, match="jobId is invalid"):
+        gateway._normalize_tool_result(
+            parsed,
+            {"content": [], "structuredContent": {"echo": 4}, "isError": False, "jobId": job_id},
+        )

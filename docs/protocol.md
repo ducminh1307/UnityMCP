@@ -158,8 +158,8 @@ tool errors rather than executing with partial or coerced input.
 - `DELETE /api/v1/jobs/{jobId}` requests cancellation. Unsupported or already
   terminal jobs return a typed conflict rather than claiming cancellation.
 
-Job payloads contain at least `jobId` and `status`; terminal states include a
-normal result or sanitized error. The MCP resources use
+Job payloads contain `jobId`, `jobType`, `cancellable`, `status`, progress and
+timestamps; terminal states include a normal result or sanitized error. The MCP resources use
 `unity://jobs/{percent-encoded-jobId}`. Job IDs are opaque and never portable
 between instances.
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from .config import DEFAULT_LIMITS, GatewayLimits, default_descriptor_dir
 from .errors import AmbiguousInstanceError, DescriptorError, InstanceNotFoundError
 from .models import InstanceDescriptor
+from .validation import json_depth
 
 
 def pid_is_alive(pid: int) -> bool:
@@ -63,9 +64,10 @@ def _read_descriptor(path: Path, limits: GatewayLimits) -> InstanceDescriptor:
         if size <= 0 or size > limits.max_descriptor_bytes:
             raise DescriptorError(f"Descriptor exceeds size limit: {path}")
         raw = json.loads(path.read_text(encoding="utf-8"))
+        json_depth(raw, limit=limits.max_json_depth)
     except DescriptorError:
         raise
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise DescriptorError(f"Cannot read descriptor {path.name}: {type(exc).__name__}") from None
     if not isinstance(raw, dict):
         raise DescriptorError(f"Descriptor {path.name} must contain a JSON object")

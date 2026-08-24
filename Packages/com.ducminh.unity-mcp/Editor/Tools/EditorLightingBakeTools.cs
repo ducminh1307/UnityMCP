@@ -50,7 +50,7 @@ namespace DucMinh.UnityMcp.Editor
                 };
             }
 
-            var handle = EditorWorkflowJobRunner.Start(new LightingBakeOperation());
+            var handle = EditorWorkflowJobRunner.Start(new LightingBakeOperation(), "lighting-bake", true);
             return new LightingBakeOutput
             {
                 accepted = true,
@@ -63,7 +63,7 @@ namespace DucMinh.UnityMcp.Editor
         private static LightingBakeOutput Cancel(LightingBakeInput input, UnityMcpContext context)
         {
             if (string.IsNullOrWhiteSpace(input.jobId)) throw new ArgumentException("jobId is required when action is cancel.");
-            if (!UnityMcpJobStore.Shared.TryGet(input.jobId, out var job)) throw new ArgumentException("Unknown UnityMCP job.");
+            var job = RequireActiveLightingBakeJob(input.jobId);
             if (context.DryRun)
             {
                 return new LightingBakeOutput
@@ -75,8 +75,7 @@ namespace DucMinh.UnityMcp.Editor
                 };
             }
 
-            if (!UnityMcpJobStore.Shared.Cancel(input.jobId, out job)) throw new ArgumentException("Unknown UnityMCP job.");
-            if (Lightmapping.isRunning) Lightmapping.Cancel();
+            if (!UnityMcpJobStore.Shared.Cancel(input.jobId, out job)) throw new ArgumentException("Unknown UnityMCP lighting bake job.");
             return new LightingBakeOutput
             {
                 cancelled = true,
@@ -84,6 +83,15 @@ namespace DucMinh.UnityMcp.Editor
                 status = job.status,
                 summary = "Lighting bake cancellation requested."
             };
+        }
+
+        internal static UnityMcpJob RequireActiveLightingBakeJob(string jobId)
+        {
+            if (!UnityMcpJobStore.Shared.TryGet(jobId, out var job) || !string.Equals(job.jobType, "lighting-bake", StringComparison.Ordinal))
+                throw new ArgumentException("Unknown UnityMCP lighting bake job.");
+            if (job.status != "queued" && job.status != "running")
+                throw new InvalidOperationException("The UnityMCP lighting bake job is no longer active.");
+            return job;
         }
 
         private sealed class LightingBakeOperation : IEditorWorkflowOperation
@@ -95,6 +103,7 @@ namespace DucMinh.UnityMcp.Editor
 
             public bool Tick(UnityMcpJob job)
             {
+                if (!started && job.IsCancellationRequested) return true;
                 if (!started)
                 {
                     started = true;

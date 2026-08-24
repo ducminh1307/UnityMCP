@@ -313,7 +313,7 @@ namespace DucMinh.UnityMcp.Editor
                 };
             }
 
-            var handle = EditorWorkflowJobRunner.Start(new AddressablesBuildOperation(buildMethod, defaultSettingsPath));
+            var handle = EditorWorkflowJobRunner.Start(new AddressablesBuildOperation(buildMethod, defaultSettingsPath), "addressables-build", true);
             return new AddressablesBuildOutput
             {
                 accepted = true,

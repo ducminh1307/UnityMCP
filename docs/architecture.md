@@ -62,11 +62,14 @@ Starting a gateway creates one child Python process with `--transport
 streamable-http`, the current Editor's explicit `--instance`, and `--parent-pid` set to
 the Editor process. The HTTP server emits a readiness event only after its loopback
 socket is bound; the Editor then marks it `Running`. The parent-PID watcher makes the
-Python process exit when its originating Editor is gone. During a domain reload the
-gateway remains alive while the Unity bridge rebinds with the same session descriptor.
-It reports a temporary retryable reload state, reconnects automatically, and the new
-Editor domain reattaches ownership of the verified child process. The child is stopped
-permanently at Editor shutdown.
+Python process exit after three consecutive failed liveness checks when its originating
+Editor is gone. During a domain reload the gateway remains alive while the Unity bridge
+rebinds with the same session descriptor. It reports a temporary retryable reload state,
+reconnects automatically, and the new Editor domain reattaches ownership only after an
+asynchronous HTTP probe confirms the recovered listener. Unexpected process exits and
+failed HTTP probes retain the desired-running intent and retry the exact existing port/path
+up to six times with bounded exponential backoff. An explicit stop or Editor shutdown clears
+that intent and stops the child permanently.
 
 Port assignment is per running gateway. If a project's preferred port is already in
 use, its launcher selects another free loopback port, so two Editors may both use the
@@ -104,7 +107,10 @@ The bridge parses and authenticates requests off the Unity main thread, then
 queues Unity API work to the main thread when `mainThread` is true. Each tool has
 a bounded timeout. Synchronous methods, `Task<T>`, structured results, and job
 handles share the same result envelope. Long-running operations return a `jobId`
-and are observed or cancelled through job endpoints.
+and are observed through job endpoints. Each job declares whether it is cancellable;
+unsupported or terminal cancellation requests return a conflict without changing the
+reported state. `compile-request` persists its job identity across the domain reload caused
+by compilation and resumes polling the same `jobId` rather than returning an unknown job.
 
 Mutation tools default to preview. A request changes state only when its schema
 supports dry-run and `apply` is explicitly true. Editor scene mutations form a

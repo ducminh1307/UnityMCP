@@ -36,6 +36,7 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class CompileRequestInput { public bool apply; }
     [Serializable] public sealed class WorkflowJobStartOutput { public bool dryRun; public bool accepted; public string jobId; public string status; public string summary; }
     [Serializable] public sealed class CompileRequestResult { public bool requested; public bool compilationObserved; public bool isCompiling; public string note; }
+    [Serializable] internal sealed class PersistedCompileRequest { public string jobId; public string createdUtc; public string startedUtc; public float progress; public string progressMessage; public string requestedUtc; public string deadlineUtc; }
     [Serializable] public sealed class ConsoleAnalyzeInput { public int limit = 500; public string severity; public string contains; }
     [Serializable] public sealed class ConsoleAnalysisGroup { public string signature; public string severity; public int count; public string example; }
     [Serializable] public sealed class ConsoleAnalysisOutput { public int total; public int errors; public int warnings; public int logs; public bool truncated; public List<ConsoleAnalysisGroup> groups = new List<ConsoleAnalysisGroup>(); }
@@ -208,7 +209,9 @@ namespace DucMinh.UnityMcp.Editor
         public static WorkflowJobStartOutput CompileRequest(CompileRequestInput input, UnityMcpContext context)
         {
             if (context.DryRun) return DryRunJob("Request Unity script compilation.");
+            CompileRequestRecovery.EnsureNoActiveRequest();
             var job = EditorWorkflowJobRunner.Start(new CompileOperation(), "compile");
+            CompileRequestRecovery.Reserve(job.jobId);
             return AcceptedJob(job, "Script compilation request queued.");
         }
 
@@ -771,10 +774,10 @@ namespace DucMinh.UnityMcp.Editor
         private static readonly Dictionary<string, IEditorWorkflowOperation> Operations = new Dictionary<string, IEditorWorkflowOperation>(StringComparer.Ordinal);
         private static bool hooked;
 
-        public static UnityMcpJobHandle Start(IEditorWorkflowOperation operation, string jobType = "workflow")
+        public static UnityMcpJobHandle Start(IEditorWorkflowOperation operation, string jobType = "workflow", bool cancellable = false)
         {
             if (operation == null) throw new ArgumentNullException(nameof(operation));
-            var job = UnityMcpJobStore.Shared.Create(jobType);
+            var job = UnityMcpJobStore.Shared.Create(jobType, cancellable);
             Operations.Add(job.jobId, operation);
             if (!hooked) { EditorApplication.update += Tick; hooked = true; }
             return new UnityMcpJobHandle { jobId = job.jobId, jobType = job.jobType, status = job.status, progress = job.progress, progressMessage = job.progressMessage };
@@ -807,7 +810,7 @@ namespace DucMinh.UnityMcp.Editor
                 if (!UnityMcpJobStore.Shared.TryGet(pair.Key, out job)) { Operations.Remove(pair.Key); continue; }
                 if (string.Equals(job.status, "cancelled", StringComparison.Ordinal) && !pair.Value.DrainWhenCancelled)
                 {
-                    if (string.Equals(job.jobType, "play-mode", StringComparison.Ordinal)) PlayModeTransitionRecovery.Clear(job.jobId);
+                    ClearRecovery(job);
                     Operations.Remove(pair.Key);
                     continue;
                 }
@@ -820,10 +823,18 @@ namespace DucMinh.UnityMcp.Editor
                 {
                     Debug.LogWarning("UnityMCP workflow job failed (" + exception.GetType().Name + "). Details were redacted.");
                     Fail(job, "The Unity Editor operation failed. See the local Unity Console for details.");
+                    ClearRecovery(job);
                     Operations.Remove(pair.Key);
                 }
             }
             if (Operations.Count == 0 && hooked) { EditorApplication.update -= Tick; hooked = false; }
+        }
+
+        private static void ClearRecovery(UnityMcpJob job)
+        {
+            if (job == null) return;
+            if (string.Equals(job.jobType, "play-mode", StringComparison.Ordinal)) PlayModeTransitionRecovery.Clear(job.jobId);
+            else if (string.Equals(job.jobType, "compile", StringComparison.Ordinal)) CompileRequestRecovery.Clear(job.jobId);
         }
     }
 
@@ -902,11 +913,135 @@ namespace DucMinh.UnityMcp.Editor
         }
     }
 
+    [InitializeOnLoad]
+    internal static class CompileRequestRecovery
+    {
+        private const string SessionKey = "DucMinh.UnityMcp.CompileRequest";
+        private static string reservedJobId;
+
+        static CompileRequestRecovery()
+        {
+            // update is retried until compilation/importing is idle, so recovery is not lost if
+            // another package throws while Unity is invoking one-shot delayCall callbacks.
+            EditorApplication.update += RestoreWhenReady;
+        }
+
+        internal static void Track(UnityMcpJob job, DateTime requestedUtc, DateTime deadlineUtc)
+        {
+            if (job == null) throw new ArgumentNullException(nameof(job));
+            if (!string.IsNullOrEmpty(reservedJobId) && !string.Equals(reservedJobId, job.jobId, StringComparison.Ordinal))
+                throw new InvalidOperationException("Another UnityMCP compile request is already active.");
+            reservedJobId = job.jobId;
+            SessionState.SetString(SessionKey, JsonConvert.SerializeObject(new PersistedCompileRequest
+            {
+                jobId = job.jobId,
+                createdUtc = job.createdUtc,
+                startedUtc = job.startedUtc,
+                progress = job.progress,
+                progressMessage = job.progressMessage,
+                requestedUtc = requestedUtc.ToUniversalTime().ToString("O"),
+                deadlineUtc = deadlineUtc.ToUniversalTime().ToString("O")
+            }));
+        }
+
+        internal static void EnsureNoActiveRequest()
+        {
+            if (!string.IsNullOrEmpty(reservedJobId))
+                throw new InvalidOperationException("Another UnityMCP compile request is already active.");
+            if (TryRead(out var persisted) && persisted != null && !string.IsNullOrWhiteSpace(persisted.jobId))
+                throw new InvalidOperationException("Another UnityMCP compile request is already active.");
+            SessionState.EraseString(SessionKey);
+        }
+
+        internal static void Reserve(string jobId)
+        {
+            if (string.IsNullOrWhiteSpace(jobId)) throw new ArgumentException("jobId is required.", nameof(jobId));
+            if (!string.IsNullOrEmpty(reservedJobId) && !string.Equals(reservedJobId, jobId, StringComparison.Ordinal))
+                throw new InvalidOperationException("Another UnityMCP compile request is already active.");
+            reservedJobId = jobId;
+        }
+
+        internal static void Clear(string jobId)
+        {
+            if (string.Equals(reservedJobId, jobId, StringComparison.Ordinal)) reservedJobId = null;
+            if (!TryRead(out var persisted))
+            {
+                SessionState.EraseString(SessionKey);
+                return;
+            }
+            if (persisted == null || string.Equals(persisted.jobId, jobId, StringComparison.Ordinal)) SessionState.EraseString(SessionKey);
+        }
+
+        internal static bool TryRead(out PersistedCompileRequest persisted)
+        {
+            persisted = null;
+            var raw = SessionState.GetString(SessionKey, string.Empty);
+            if (string.IsNullOrEmpty(raw)) return false;
+            try { persisted = JsonConvert.DeserializeObject<PersistedCompileRequest>(raw); }
+            catch { return false; }
+            return persisted != null;
+        }
+
+        internal static bool TryCreateRestoredState(PersistedCompileRequest persisted, out UnityMcpJob job, out CompileOperation operation)
+        {
+            job = null;
+            operation = null;
+            if (persisted == null || string.IsNullOrWhiteSpace(persisted.jobId) ||
+                !DateTime.TryParse(persisted.requestedUtc, out var requestedUtc) ||
+                !DateTime.TryParse(persisted.deadlineUtc, out var deadlineUtc)) return false;
+            Reserve(persisted.jobId);
+            job = UnityMcpJobStore.Shared.Restore(
+                persisted.jobId, "compile", "running", persisted.progress, persisted.progressMessage,
+                persisted.createdUtc, persisted.startedUtc);
+            operation = new CompileOperation(requestedUtc.ToUniversalTime(), deadlineUtc.ToUniversalTime(), true);
+            return true;
+        }
+
+        private static void RestoreWhenReady()
+        {
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating) return;
+            EditorApplication.update -= RestoreWhenReady;
+            if (!TryRead(out var persisted))
+            {
+                SessionState.EraseString(SessionKey);
+                return;
+            }
+            if (!TryCreateRestoredState(persisted, out var job, out var operation))
+            {
+                SessionState.EraseString(SessionKey);
+                return;
+            }
+            if (DateTime.UtcNow > operation.DeadlineUtc)
+            {
+                UnityMcpJobStore.Shared.Fail(job, "Timed out while Unity reloaded during the requested script compilation.");
+                Clear(job.jobId);
+                return;
+            }
+            EditorWorkflowJobRunner.Resume(job, operation);
+        }
+    }
+
     internal sealed class CompileOperation : IEditorWorkflowOperation
     {
         private bool requested;
         private bool observedCompilation;
         private DateTime requestedAtUtc;
+        private DateTime deadlineUtc;
+        private readonly bool recoveredAfterReload;
+
+        public CompileOperation() { }
+
+        internal CompileOperation(DateTime requestedAtUtc, DateTime deadlineUtc, bool recoveredAfterReload)
+        {
+            requested = true;
+            observedCompilation = true;
+            this.requestedAtUtc = requestedAtUtc.ToUniversalTime();
+            this.deadlineUtc = deadlineUtc.ToUniversalTime();
+            this.recoveredAfterReload = recoveredAfterReload;
+        }
+
+        internal bool RequestAlreadySubmitted => requested;
+        internal DateTime DeadlineUtc => deadlineUtc;
 
         public bool DrainWhenCancelled => false;
 
@@ -916,9 +1051,17 @@ namespace DucMinh.UnityMcp.Editor
             {
                 requested = true;
                 requestedAtUtc = DateTime.UtcNow;
-                job.status = "running";
+                deadlineUtc = requestedAtUtc.AddMinutes(10);
+                UnityMcpJobStore.Shared.Report(job, 0.25f, "Script compilation requested; waiting for Unity to become idle.");
+                CompileRequestRecovery.Track(job, requestedAtUtc, deadlineUtc);
                 CompilationPipeline.RequestScriptCompilation();
                 return false;
+            }
+            if (DateTime.UtcNow > deadlineUtc)
+            {
+                EditorWorkflowJobRunner.Fail(job, "Timed out waiting for the requested script compilation to finish.");
+                CompileRequestRecovery.Clear(job.jobId);
+                return true;
             }
             if (EditorApplication.isCompiling) { observedCompilation = true; return false; }
             if (!observedCompilation && DateTime.UtcNow - requestedAtUtc < TimeSpan.FromSeconds(2)) return false;
@@ -927,8 +1070,13 @@ namespace DucMinh.UnityMcp.Editor
                 requested = true,
                 compilationObserved = observedCompilation,
                 isCompiling = EditorApplication.isCompiling,
-                note = observedCompilation ? "Compilation completed before this Editor domain reloaded." : "Unity accepted the request but did not report a compilation phase in this domain."
+                note = recoveredAfterReload
+                    ? "Compilation completed and the UnityMCP job was recovered after the Editor domain reload."
+                    : observedCompilation
+                        ? "Unity reported the requested compilation and is idle again."
+                        : "Unity accepted the request but did not report a compilation phase in this domain."
             });
+            CompileRequestRecovery.Clear(job.jobId);
             return true;
         }
     }

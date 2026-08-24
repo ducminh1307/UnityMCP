@@ -125,7 +125,9 @@ client knows when to use the live Unity tools.
 
 The setup above uses the Editor-managed mode. Its endpoint is loopback-only,
 uses one token and one gateway per open Unity project, and stops when the owning
-Unity process exits.
+Unity process exits. If the child gateway crashes or stops answering its local
+HTTP probe, the Editor retries the same endpoint with bounded backoff; selecting
+**Stop gateway** cancels that restart intent.
 
 For an advanced client-managed stdio setup, configure the installed command in
 your MCP client:
@@ -154,6 +156,11 @@ A fresh project enables only the 20 built-in `safe-read` tools. All mutating
 tools and project-defined tools require explicit local opt-in in **Window >
 UnityMCP > Tools**. Mutating tools use dry-run behavior by default and require
 `apply: true` when their contract supports applying changes.
+
+The same window includes an **Allow Lists** page for creating, selecting, and
+editing the project-owned Menu, Reflection, C# Command, and Batch allowlist
+ScriptableObjects. These assets remain the policy source of truth and can only
+be changed by a local Editor user; an MCP client cannot extend its own access.
 
 The gateway advertises only tools that are implemented, valid, enabled, and in
 scope for the connected Unity process. Planned catalog entries are never exposed

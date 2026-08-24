@@ -20,8 +20,16 @@ def _json_copy(value: Any) -> Any:
     return copy.deepcopy(value)
 
 
+def _is_well_formed_unicode(value: str) -> bool:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def canonical_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(",", ":"))
 
 
 def schema_hash(schema: Mapping[str, Any]) -> str:
@@ -76,6 +84,7 @@ class InstanceDescriptor:
                 or not value.strip()
                 or len(value) > 256
                 or any(ord(c) < 32 or ord(c) == 127 for c in value)
+                or not _is_well_formed_unicode(value)
             ):
                 from .errors import DescriptorError
 
@@ -88,6 +97,7 @@ class InstanceDescriptor:
             not isinstance(build_id, str)
             or len(build_id) > 256
             or any(ord(c) < 32 or ord(c) == 127 for c in build_id)
+            or not _is_well_formed_unicode(build_id)
         ):
             from .errors import DescriptorError
 
@@ -144,6 +154,10 @@ class ToolDescriptor:
         name = raw.get("name")
         if not isinstance(name, str) or not _TOOL_NAME.fullmatch(name):
             raise RegistryError(f"Invalid MCP tool name: {name!r}")
+        try:
+            canonical_json(raw).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise RegistryError(f"Tool {name!r} descriptor is not canonical JSON: {type(exc).__name__}") from None
         input_schema = raw.get("inputSchema", {"type": "object", "properties": {}})
         output_schema = raw.get("outputSchema")
         if output_schema == {}:
@@ -153,12 +167,16 @@ class ToolDescriptor:
         if output_schema is not None and not isinstance(output_schema, Mapping):
             raise RegistryError(f"Tool {name!r} outputSchema must be an object")
         safety = raw.get("safety", "unsafe")
-        if safety not in _SAFETY:
+        if not isinstance(safety, str) or safety not in _SAFETY:
             raise RegistryError(f"Tool {name!r} has invalid safety tier {safety!r}")
         scopes_raw = raw.get("scopes", raw.get("scope", ["editor"]))
         if isinstance(scopes_raw, str):
             scopes_raw = [scopes_raw]
-        if not isinstance(scopes_raw, list) or not scopes_raw or any(s not in _SCOPE for s in scopes_raw):
+        if (
+            not isinstance(scopes_raw, list)
+            or not scopes_raw
+            or any(not isinstance(scope, str) or scope not in _SCOPE for scope in scopes_raw)
+        ):
             raise RegistryError(f"Tool {name!r} has invalid scopes")
         annotations = raw.get("annotations", {})
         if not isinstance(annotations, Mapping):
@@ -166,23 +184,36 @@ class ToolDescriptor:
         for key in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"):
             if key in annotations and not isinstance(annotations[key], bool):
                 raise RegistryError(f"Tool {name!r} annotation {key} must be a boolean")
-        if "title" in annotations and not isinstance(annotations["title"], str):
-            raise RegistryError(f"Tool {name!r} annotation title must be a string")
+        if "title" in annotations:
+            annotation_title = annotations["title"]
+            if not isinstance(annotation_title, str) or not _is_well_formed_unicode(annotation_title):
+                raise RegistryError(f"Tool {name!r} annotation title must be a valid Unicode string")
         timeout_ms = raw.get("timeoutMs", 30_000)
         if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or not (100 <= timeout_ms <= 600_000):
             raise RegistryError(f"Tool {name!r} timeoutMs must be between 100 and 600000")
         supplied_hash = raw.get("schemaHash")
-        combined_hash = schema_hash({"input": input_schema, "output": output_schema})
-        if supplied_hash is not None and (not isinstance(supplied_hash, str) or len(supplied_hash) > 128):
+        try:
+            combined_hash = schema_hash({"input": input_schema, "output": output_schema})
+        except (TypeError, ValueError) as exc:
+            raise RegistryError(f"Tool {name!r} schemas are not canonical JSON: {type(exc).__name__}") from None
+        if supplied_hash is not None and (
+            not isinstance(supplied_hash, str)
+            or len(supplied_hash) > 128
+            or not _is_well_formed_unicode(supplied_hash)
+        ):
             raise RegistryError(f"Tool {name!r} schemaHash is invalid")
         status_raw = raw.get("status")
-        if status_raw is not None and status_raw not in {"planned", "implemented", "invalid"}:
+        if status_raw is not None and (
+            not isinstance(status_raw, str) or status_raw not in {"planned", "implemented", "invalid"}
+        ):
             raise RegistryError(f"Tool {name!r} has invalid status {status_raw!r}")
-        implemented = boolean("implemented", status_raw != "planned")
+        implemented = boolean("implemented", status_raw not in {"planned", "invalid"})
         status = status_raw or ("implemented" if implemented else "planned")
         for key in ("title", "description", "category", "source", "packageDependency"):
             if key in raw and raw[key] is not None and not isinstance(raw[key], str):
                 raise RegistryError(f"Tool {name!r} {key} must be a string")
+            if isinstance(raw.get(key), str) and not _is_well_formed_unicode(raw[key]):
+                raise RegistryError(f"Tool {name!r} {key} must contain valid Unicode")
         schema_revision = raw.get("schemaRevision", 1)
         if isinstance(schema_revision, bool) or not isinstance(schema_revision, int) or schema_revision < 1:
             raise RegistryError(f"Tool {name!r} schemaRevision must be a positive integer")
@@ -205,7 +236,7 @@ class ToolDescriptor:
             timeout_ms=timeout_ms,
             implemented=implemented,
             enabled=boolean("enabled", False),
-            valid=boolean("valid", True),
+            valid=boolean("valid", status_raw != "invalid"),
             status=status,
             package_dependency=raw.get("packageDependency") if isinstance(raw.get("packageDependency"), str) else None,
             schema_revision=schema_revision,
@@ -213,7 +244,13 @@ class ToolDescriptor:
 
     def is_advertisable(self, kind: str) -> bool:
         scope = "editor" if kind == "editor" else "runtime"
-        return self.implemented and self.enabled and self.valid and scope in self.scopes
+        return (
+            self.status == "implemented"
+            and self.implemented
+            and self.enabled
+            and self.valid
+            and scope in self.scopes
+        )
 
     def catalog_dict(self) -> dict[str, Any]:
         return {

@@ -43,6 +43,16 @@ def test_discovery_filters_stale_and_malformed_descriptors(tmp_path) -> None:
     assert "token" not in found[0].public_dict()
 
 
+def test_discovery_skips_recursively_deep_descriptors_without_hiding_healthy_instances(tmp_path) -> None:
+    write_private(tmp_path / "healthy.json", json.dumps(descriptor("healthy", 10)))
+    write_private(tmp_path / "too-deep.json", '{"ignored":' + "[" * 256 + "0" + "]" * 256 + "}")
+    write_private(tmp_path / "decoder-recursion.json", '{"ignored":' + "[" * 5000 + "0" + "]" * 5000 + "}")
+
+    found = discover_instances(tmp_path, liveness=lambda pid: pid == 10)
+
+    assert [item.instance_id for item in found] == ["healthy"]
+
+
 def test_discovery_deduplicates_instance_id_deterministically(tmp_path) -> None:
     write_private(tmp_path / "a.json", json.dumps(descriptor("same", 10)))
     second = descriptor("same", 11)
@@ -70,6 +80,10 @@ def test_invalid_descriptor_fields_are_rejected() -> None:
     raw = descriptor("bad")
     raw["port"] = 0
     with pytest.raises(Exception, match="port"):
+        InstanceDescriptor.from_dict(raw)
+
+    raw = descriptor(chr(0xD800))
+    with pytest.raises(Exception, match="instanceId"):
         InstanceDescriptor.from_dict(raw)
 
 

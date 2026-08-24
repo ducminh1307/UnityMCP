@@ -11,6 +11,7 @@ namespace DucMinh.UnityMcp
     {
         public string jobId;
         public string jobType;
+        public bool cancellable;
         public string status;
         public float progress;
         public string progressMessage;
@@ -27,6 +28,9 @@ namespace DucMinh.UnityMcp
         /// mutable cancellation source across the Runtime/Editor assembly boundary.
         /// </summary>
         public bool IsCancellationRequested => cancellation != null && cancellation.IsCancellationRequested;
+
+        /// <summary>True only while this job both supports and can still accept cancellation.</summary>
+        public bool CanCancel => cancellable && (status == "queued" || status == "running");
     }
 
     public sealed class UnityMcpJobStore
@@ -34,11 +38,14 @@ namespace DucMinh.UnityMcp
         public static UnityMcpJobStore Shared { get; } = new UnityMcpJobStore();
         private readonly ConcurrentDictionary<string, UnityMcpJob> jobs = new ConcurrentDictionary<string, UnityMcpJob>();
 
-        public UnityMcpJob Create(string jobType = "operation")
+        public UnityMcpJob Create(string jobType = "operation") => Create(jobType, false);
+
+        public UnityMcpJob Create(string jobType, bool cancellable)
         {
             var job = new UnityMcpJob
             {
                 jobId = Guid.NewGuid().ToString("N"), jobType = string.IsNullOrWhiteSpace(jobType) ? "operation" : jobType,
+                cancellable = cancellable,
                 status = "queued", progress = 0f, createdUtc = DateTime.UtcNow.ToString("O"), cancellation = new CancellationTokenSource()
             };
             jobs[job.jobId] = job;
@@ -47,12 +54,16 @@ namespace DucMinh.UnityMcp
 
         /// <summary>Restores an Editor-persisted job after a Unity domain reload.</summary>
         public UnityMcpJob Restore(string jobId, string jobType, string status, float progress, string progressMessage, string createdUtc, string startedUtc)
+            => Restore(jobId, jobType, status, progress, progressMessage, createdUtc, startedUtc, false);
+
+        public UnityMcpJob Restore(string jobId, string jobType, string status, float progress, string progressMessage, string createdUtc, string startedUtc, bool cancellable)
         {
             if (string.IsNullOrWhiteSpace(jobId)) throw new ArgumentException("jobId is required.");
             var job = new UnityMcpJob
             {
                 jobId = jobId,
                 jobType = string.IsNullOrWhiteSpace(jobType) ? "operation" : jobType,
+                cancellable = cancellable,
                 status = string.IsNullOrWhiteSpace(status) ? "queued" : status,
                 progress = Math.Max(0f, Math.Min(1f, progress)),
                 progressMessage = progressMessage,
@@ -95,9 +106,9 @@ namespace DucMinh.UnityMcp
         public bool Cancel(string id, out UnityMcpJob job)
         {
             if (!jobs.TryGetValue(id, out job)) return false;
+            if (!job.CanCancel) return false;
             job.cancellation.Cancel();
-            if (job.status == "queued" || job.status == "running")
-                Finish(job, "cancelled", job.result, null, "Cancellation requested.");
+            Finish(job, "cancelled", job.result, null, "Cancellation requested.");
             return true;
         }
 

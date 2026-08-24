@@ -9,7 +9,8 @@ import logging
 import os
 import sys
 import threading
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from .config import DEFAULT_LIMITS, default_descriptor_dir
@@ -17,6 +18,9 @@ from .discovery import discover_instances, pid_is_alive, select_instance
 from .errors import ConfigurationError
 
 _PARENT_POLL_INTERVAL_SECONDS = 0.5
+_PARENT_LIVENESS_FAILURE_THRESHOLD = 3
+_PARENT_STARTUP_RETRY_INTERVAL_SECONDS = 0.1
+_HTTP_SESSION_IDLE_TIMEOUT_SECONDS = 30 * 60
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -68,6 +72,23 @@ def _is_process_alive(pid: int) -> bool:
     return pid_is_alive(pid)
 
 
+def _parent_is_alive_at_startup(
+    pid: int,
+    *,
+    liveness: Callable[[int], bool] | None = None,
+    wait: Callable[[float], None] | None = None,
+) -> bool:
+    """Require the same consecutive-failure threshold used by the runtime watchdog."""
+    check = liveness or _is_process_alive
+    pause = wait or time.sleep
+    for attempt in range(_PARENT_LIVENESS_FAILURE_THRESHOLD):
+        if check(pid):
+            return True
+        if attempt + 1 < _PARENT_LIVENESS_FAILURE_THRESHOLD:
+            pause(_PARENT_STARTUP_RETRY_INTERVAL_SECONDS)
+    return False
+
+
 def _emit_http_event(event: str, payload: dict[str, object]) -> None:
     """Emit a machine-readable lifecycle event without contaminating stdio MCP."""
     print(
@@ -77,16 +98,32 @@ def _emit_http_event(event: str, payload: dict[str, object]) -> None:
     )
 
 
+def _try_emit_http_event(event: str, payload: dict[str, object]) -> bool:
+    """Keep lifecycle diagnostics from terminating the watchdog thread."""
+    try:
+        _emit_http_event(event, payload)
+    except Exception:
+        logging.exception("Could not emit UnityMCP %s lifecycle event", event.lower())
+        return False
+    return True
+
+
 def _monitor_http_server(server, *, port: int, path: str, parent_pid: int | None, stopped: threading.Event) -> None:
     """Report readiness after bind and stop an editor-owned gateway with Unity."""
     ready_emitted = False
+    consecutive_parent_liveness_failures = 0
     while not stopped.wait(_PARENT_POLL_INTERVAL_SECONDS):
-        if parent_pid is not None and not _is_process_alive(parent_pid):
-            _emit_http_event("PARENT_EXITED", {"parentPid": parent_pid})
-            server.should_exit = True
-            return
+        if parent_pid is not None:
+            if _is_process_alive(parent_pid):
+                consecutive_parent_liveness_failures = 0
+            else:
+                consecutive_parent_liveness_failures += 1
+                if consecutive_parent_liveness_failures >= _PARENT_LIVENESS_FAILURE_THRESHOLD:
+                    server.should_exit = True
+                    _try_emit_http_event("PARENT_EXITED", {"parentPid": parent_pid})
+                    return
         if not ready_emitted and server.started and not server.should_exit:
-            _emit_http_event(
+            ready_emitted = _try_emit_http_event(
                 "READY",
                 {
                     "endpoint": f"http://127.0.0.1:{port}{path}",
@@ -97,7 +134,6 @@ def _monitor_http_server(server, *, port: int, path: str, parent_pid: int | None
                     "transport": "streamable-http",
                 },
             )
-            ready_emitted = True
 
 
 def _run_http(server, port: int, path: str, log_level: str, token: str, parent_pid: int | None = None) -> None:
@@ -120,6 +156,9 @@ def _run_http(server, port: int, path: str, log_level: str, token: str, parent_p
         ),
         token_verifier=StaticTokenVerifier(token),
     )
+    # Stateful sessions survive transient HTTP disconnects, but abandoned clients must not
+    # remain in the SDK's session table forever. This comfortably exceeds the longest tool timeout.
+    server.session_manager.session_idle_timeout = _HTTP_SESSION_IDLE_TIMEOUT_SECONDS
     uvicorn_server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=port, log_level=log_level.lower(), workers=1)
     )
@@ -173,14 +212,27 @@ def run(argv: Sequence[str] | None = None) -> int:
             raise ConfigurationError("--parent-pid is supported only with --transport streamable-http")
         if args.parent_pid <= 0:
             raise ConfigurationError("--parent-pid must be a positive process ID")
-        if not _is_process_alive(args.parent_pid):
+        if not _parent_is_alive_at_startup(args.parent_pid):
             raise ConfigurationError(f"--parent-pid {args.parent_pid} is not running")
     http_token: str | None = None
     if args.transport == "streamable-http":
         from .http_auth import resolve_http_token
 
         http_token = resolve_http_token(args.http_token)
-    descriptor = select_instance(discover_instances(args.descriptor_dir), args.instance)
+
+    def descriptor_liveness(pid: int) -> bool:
+        if args.parent_pid is not None and pid == args.parent_pid:
+            return True
+        return _is_process_alive(pid)
+
+    descriptor = select_instance(
+        discover_instances(args.descriptor_dir, liveness=descriptor_liveness),
+        args.instance,
+    )
+    if args.parent_pid is not None and descriptor.pid != args.parent_pid:
+        raise ConfigurationError(
+            f"Selected Unity descriptor PID {descriptor.pid} does not match --parent-pid {args.parent_pid}"
+        )
     service = _build_service(descriptor)
     from .mcp_adapter import create_mcp_server
 

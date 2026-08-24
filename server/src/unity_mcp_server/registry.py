@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
@@ -16,6 +17,12 @@ from .models import InvalidToolDiagnostic, RegistrySnapshot, ToolDescriptor, can
 from .validation import check_schema
 
 ChangeCallback = Callable[[RegistrySnapshot], Awaitable[None] | None]
+logger = logging.getLogger(__name__)
+
+
+def _diagnostic_text(value: object, limit: int) -> str:
+    text = str(value).encode("utf-8", errors="backslashreplace").decode("utf-8")
+    return text[:limit]
 
 
 class DynamicToolRegistry:
@@ -133,13 +140,13 @@ class DynamicToolRegistry:
                 if tool.output_schema is not None:
                     check_schema(tool.output_schema, tool_name=tool.name, phase="output", limits=self.limits)
                 parsed_by_name[tool.name] = tool
-            except RegistryError as exc:
+            except Exception as exc:
                 diagnostics.append(
                     InvalidToolDiagnostic(
                         index=index,
-                        name=name[:128] if name else None,
+                        name=_diagnostic_text(name, 128) if name else None,
                         code="invalid_tool_descriptor",
-                        message=str(exc)[:1024],
+                        message=_diagnostic_text(str(exc) or type(exc).__name__, 1024),
                     )
                 )
         parsed = list(parsed_by_name.values())
@@ -172,6 +179,7 @@ class DynamicToolRegistry:
         return canonical_json(
             {
                 "revision": snapshot.revision,
+                "state": snapshot.state,
                 "tools": [tool.catalog_dict() for tool in snapshot.tools],
                 "invalidTools": [diagnostic.catalog_dict() for diagnostic in snapshot.invalid_tools],
             }
@@ -189,6 +197,11 @@ class DynamicToolRegistry:
 
     async def poll(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
-            await self.refresh(force=True)
+            try:
+                await self.refresh(force=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("UnityMCP registry poll failed; retrying")
             with suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=self.limits.registry_poll_seconds)

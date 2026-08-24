@@ -155,9 +155,17 @@ async def test_real_streamable_http_subprocess_proxies_to_bridge(tmp_path) -> No
 async def test_streamable_http_gateway_exits_when_watched_parent_exits(tmp_path) -> None:
     gateway_port = _free_loopback_port()
     http_token = "streamable-http-parent-token-" * 2
+    parent = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        "import time; time.sleep(60)",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
     descriptor = {
         "port": 65530,
-        "pid": os.getpid(),
+        "pid": parent.pid,
         "projectId": "parent-project",
         "instanceId": "parent-instance",
         "kind": "editor",
@@ -168,14 +176,6 @@ async def test_streamable_http_gateway_exits_when_watched_parent_exits(tmp_path)
     descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
     if os.name != "nt":
         descriptor_path.chmod(0o600)
-    parent = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-c",
-        "import time; time.sleep(60)",
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
     gateway = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",

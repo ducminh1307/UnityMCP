@@ -160,6 +160,74 @@ async def test_invalid_json_schema_does_not_hide_valid_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_malformed_tool_field_types_are_quarantined_without_stopping_refresh() -> None:
+    bad_scope = tool("bad-scope")
+    bad_scope["scopes"] = [{}]
+    bad_safety = tool("bad-safety")
+    bad_safety["safety"] = {}
+    bad_status = tool("bad-status")
+    bad_status["status"] = {}
+    bad_unicode = tool("bad-unicode")
+    bad_unicode["inputSchema"]["description"] = chr(0xD800)
+    bad_name = tool("placeholder")
+    bad_name["name"] = chr(0xD800)
+    bridge = FakeBridge(
+        [
+            RegistryHttpResult(
+                False,
+                '"malformed"',
+                {
+                    "registryRevision": "malformed",
+                    "tools": [tool("unity-status"), bad_scope, bad_safety, bad_status, bad_unicode, bad_name],
+                },
+            )
+        ]
+    )
+    registry = DynamicToolRegistry(bridge)
+
+    snapshot = await registry.refresh(force=True)
+
+    assert [entry.name for entry in snapshot.tools] == ["unity-status"]
+    assert snapshot.state == "ready_with_invalid_tools"
+    assert {diagnostic.name for diagnostic in snapshot.invalid_tools} == {
+        "bad-scope",
+        "bad-safety",
+        "bad-status",
+        "bad-unicode",
+        "\\ud800",
+    }
+
+
+@pytest.mark.asyncio
+async def test_registry_poll_retries_after_unexpected_refresh_exception() -> None:
+    class FailsOnceBridge(FakeBridge):
+        def __init__(self) -> None:
+            super().__init__([RegistryHttpResult(False, '"ok"', {"registryRevision": "1", "tools": [tool("ok")]})])
+            self.failed = False
+
+        async def fetch_tools(self, etag=None):
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("unexpected parser failure")
+            return await super().fetch_tools(etag)
+
+    limits = GatewayLimits(registry_poll_seconds=0.001, registry_min_refresh_seconds=0.0)
+    registry = DynamicToolRegistry(FailsOnceBridge(), limits=limits)
+    stop = asyncio.Event()
+
+    poll = asyncio.create_task(registry.poll(stop))
+    for _ in range(100):
+        if registry.snapshot.state == "ready":
+            break
+        await asyncio.sleep(0.001)
+    stop.set()
+    await poll
+
+    assert registry.snapshot.state == "ready"
+    assert [entry.name for entry in registry.snapshot.tools] == ["ok"]
+
+
+@pytest.mark.asyncio
 async def test_offline_grace_expiry_clears_etag_before_reconnect() -> None:
     clock_value = [10.0]
 
@@ -205,6 +273,28 @@ async def test_offline_grace_expiry_clears_etag_before_reconnect() -> None:
     assert [entry.name for entry in recovered.tools] == ["scene-list", "unity-status"]
 
 
+@pytest.mark.asyncio
+async def test_registry_state_changes_notify_even_when_tool_catalog_is_unchanged() -> None:
+    bridge = FakeBridge(
+        [
+            RegistryHttpResult(
+                False,
+                '"one"',
+                {"registryRevision": "1", "tools": [tool("unity-status")]},
+            ),
+            BridgeError("target_unavailable", "Unity is reloading", retryable=True),
+        ]
+    )
+    registry = DynamicToolRegistry(bridge)
+    states: list[str] = []
+    registry.on_change(lambda snapshot: states.append(snapshot.state))
+
+    await registry.refresh(force=True)
+    await registry.refresh(force=True)
+
+    assert states == ["ready", "target_unavailable"]
+
+
 def test_descriptor_defaults_match_unity_wire_and_empty_output_means_unstructured() -> None:
     raw = tool("unity-wire")
     raw.pop("implemented")
@@ -225,3 +315,17 @@ def test_security_booleans_are_not_coerced_from_strings() -> None:
 
     with pytest.raises(RegistryError, match="enabled must be a boolean"):
         ToolDescriptor.from_dict(raw)
+
+
+def test_invalid_status_is_never_advertised_when_flags_are_omitted() -> None:
+    raw = tool("invalid-status")
+    raw.pop("implemented")
+    raw.pop("valid")
+    raw["status"] = "invalid"
+
+    parsed = ToolDescriptor.from_dict(raw)
+
+    assert parsed.status == "invalid"
+    assert parsed.implemented is False
+    assert parsed.valid is False
+    assert parsed.is_advertisable("editor") is False

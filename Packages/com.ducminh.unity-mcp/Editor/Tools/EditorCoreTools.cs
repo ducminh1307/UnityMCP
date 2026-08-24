@@ -197,7 +197,7 @@ namespace DucMinh.UnityMcp.Editor
         [UnityMcpTool("asset-delete", Description = "Delete an asset; dry-run unless apply is true.", Category = "asset", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Destructive, SupportsDryRun = true)]
         public static ChangeOutput AssetDelete(AssetDeleteInput input, UnityMcpContext context)
         {
-            ValidateExistingAsset(input.path);
+            ValidateAssetDeleteTarget(input.path);
             if (!context.DryRun && !AssetDatabase.DeleteAsset(input.path)) throw new InvalidOperationException("Unity could not delete the asset.");
             return AssetChange(context, $"Delete asset '{input.path}'.", "delete", input.path, null);
         }
@@ -354,25 +354,19 @@ namespace DucMinh.UnityMcp.Editor
             if (AssetDatabase.LoadMainAssetAtPath(path) == null && !AssetDatabase.IsValidFolder(path)) throw new ArgumentException("Asset was not found: " + path);
         }
 
-        private static GameObject FindGameObject(int? instanceId, string path)
+        internal static void ValidateAssetDeleteTarget(string path)
         {
-            if (instanceId.HasValue)
-            {
-                var value = EditorUtility.EntityIdToObject((EntityId)instanceId.Value) as GameObject;
-                if (value != null && value.scene.IsValid()) return value;
-            }
-            if (!string.IsNullOrEmpty(path))
-                foreach (var root in Enumerable.Range(0, SceneManager.sceneCount).Select(SceneManager.GetSceneAt).SelectMany(s => s.GetRootGameObjects()))
-                    foreach (var transform in root.GetComponentsInChildren<Transform>(true))
-                        if (ScenePath(transform.gameObject) == path) return transform.gameObject;
-            throw new ArgumentException("GameObject was not found.");
+            if (!string.IsNullOrEmpty(path) && string.Equals(path.TrimEnd('/', '\\'), "Assets", StringComparison.Ordinal))
+                throw new ArgumentException("The project Assets root cannot be deleted.", nameof(path));
+            ValidateExistingAsset(path);
         }
 
-        private static string ScenePath(GameObject value)
+        private static GameObject FindGameObject(int? instanceId, string path)
         {
-            var names = new Stack<string>();
-            for (var current = value.transform; current != null; current = current.parent) names.Push(current.name);
-            return value.scene.name + ":/" + string.Join("/", names.ToArray());
+            var selected = RuntimeCoreTools.GameObjectGet(new GameObjectGetInput { instanceId = instanceId, path = path });
+            var value = EditorUtility.EntityIdToObject((EntityId)selected.instanceId) as GameObject;
+            if (value == null || !value.scene.IsValid()) throw new ArgumentException("GameObject was not found.");
+            return value;
         }
 
         private static void ValidateCustomSpec(CustomToolScaffoldInput input)

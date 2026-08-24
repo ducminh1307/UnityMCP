@@ -7,6 +7,9 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEngine;
 
@@ -70,6 +73,106 @@ namespace DucMinh.UnityMcp.Editor
     }
 
     /// <summary>
+    /// Pure restart/backoff state kept separate from process management so crash recovery can be
+    /// regression-tested without launching an external process from the Unity Test Runner.
+    /// </summary>
+    internal sealed class UnityMcpGatewayRestartPolicy
+    {
+        internal const int MaxAttempts = 6;
+        internal static readonly TimeSpan StableRunWindow = TimeSpan.FromSeconds(30);
+
+        private DateTime runningSinceUtc;
+
+        internal bool Pending { get; private set; }
+        internal int AttemptCount { get; private set; }
+        internal int Port { get; private set; }
+        internal string McpPath { get; private set; }
+        internal string LastError { get; private set; }
+        internal DateTime NextAttemptUtc { get; private set; }
+
+        internal bool Schedule(DateTime nowUtc, int port, string mcpPath, string error)
+        {
+            if (port < 1 || port > 65535 || string.IsNullOrWhiteSpace(mcpPath)) return false;
+            runningSinceUtc = DateTime.MinValue;
+            LastError = error;
+            Port = port;
+            McpPath = mcpPath;
+            if (AttemptCount >= MaxAttempts)
+            {
+                Pending = false;
+                return false;
+            }
+
+            var delaySeconds = Math.Min(16, 1 << Math.Min(AttemptCount, 4));
+            NextAttemptUtc = nowUtc + TimeSpan.FromSeconds(delaySeconds);
+            Pending = true;
+            return true;
+        }
+
+        internal bool TryBeginAttempt(DateTime nowUtc, out int port, out string mcpPath)
+        {
+            port = 0;
+            mcpPath = null;
+            if (!Pending || nowUtc < NextAttemptUtc || AttemptCount >= MaxAttempts) return false;
+            Pending = false;
+            AttemptCount++;
+            port = Port;
+            mcpPath = McpPath;
+            return true;
+        }
+
+        internal void MarkRunning(DateTime nowUtc)
+        {
+            Pending = false;
+            runningSinceUtc = nowUtc;
+        }
+
+        internal void ObserveRunning(DateTime nowUtc)
+        {
+            if (runningSinceUtc == DateTime.MinValue || nowUtc - runningSinceUtc < StableRunWindow) return;
+            AttemptCount = 0;
+            Port = 0;
+            McpPath = null;
+            LastError = null;
+            NextAttemptUtc = DateTime.MinValue;
+            runningSinceUtc = DateTime.MinValue;
+        }
+
+        internal void Reset()
+        {
+            Pending = false;
+            AttemptCount = 0;
+            Port = 0;
+            McpPath = null;
+            LastError = null;
+            NextAttemptUtc = DateTime.MinValue;
+            runningSinceUtc = DateTime.MinValue;
+        }
+    }
+
+    /// <summary>Tracks consecutive loopback probe failures without owning any process state.</summary>
+    internal sealed class UnityMcpGatewayHealthPolicy
+    {
+        internal const int FailureThreshold = 3;
+
+        internal int ConsecutiveFailures { get; private set; }
+
+        internal bool Observe(bool healthy)
+        {
+            if (healthy)
+            {
+                ConsecutiveFailures = 0;
+                return false;
+            }
+
+            ConsecutiveFailures++;
+            return ConsecutiveFailures >= FailureThreshold;
+        }
+
+        internal void Reset() => ConsecutiveFailures = 0;
+    }
+
+    /// <summary>
     /// Starts an owned Python <c>unity-mcp</c> process for this exact Unity Editor instance.
     ///
     /// This is intentionally Editor-only and only starts the Streamable HTTP transport. The
@@ -85,7 +188,10 @@ namespace DucMinh.UnityMcp.Editor
         private const int DefaultPort = 8765;
         private const int PortProbeCount = 128;
         private const int MaxLogLines = 20;
+        private const int HealthProbeTimeoutMilliseconds = 1000;
         private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(15);
+        private static readonly TimeSpan HealthProbeInterval = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan HealthProbeFailureRetryInterval = TimeSpan.FromSeconds(1);
 
         private static readonly object Gate = new object();
         private static readonly string ProjectKey = BuildProjectKey();
@@ -100,9 +206,17 @@ namespace DucMinh.UnityMcp.Editor
         private static bool restartAfterAssemblyReload;
         private static bool restartAfterGatewayExit;
         private static int restartPort;
-        private static DateTime restartDeadlineUtc;
+        private static string restartMcpPath;
+        private static string activeMcpPath;
+        private static bool desiredRunning;
+        private static bool healthRequiredBeforeRunning;
+        private static DateTime nextHealthProbeUtc;
+        private static Task<bool> healthProbeTask;
+        private static CancellationTokenSource healthProbeCancellation;
         private static string bearerToken;
         private static readonly Queue<string> recentLogs = new Queue<string>();
+        private static readonly UnityMcpGatewayRestartPolicy restartPolicy = new UnityMcpGatewayRestartPolicy();
+        private static readonly UnityMcpGatewayHealthPolicy healthPolicy = new UnityMcpGatewayHealthPolicy();
 
         public static event Action<UnityMcpGatewayStatus> StatusChanged;
 
@@ -116,14 +230,29 @@ namespace DucMinh.UnityMcp.Editor
             var recoveredGateway = RecoverPersistedGatewayIfOwned();
             restartAfterAssemblyReload = SessionState.GetBool(SessionKey("restartAfterReload"), false);
             int.TryParse(SessionState.GetString(SessionKey("restartPort"), string.Empty), out restartPort);
+            restartMcpPath = NormalizeMcpPath(SessionState.GetString(SessionKey("restartMcpPath"), activeMcpPath ?? DefaultMcpPath));
             SessionState.EraseBool(SessionKey("restartAfterReload"));
             SessionState.EraseString(SessionKey("restartPort"));
+            SessionState.EraseString(SessionKey("restartMcpPath"));
             // The normal path keeps the child process alive. If it died while Unity was
             // replacing the managed domain, restart it on the same endpoint so the MCP
             // client configuration remains valid instead of leaving the transport offline.
             if (restartAfterAssemblyReload && !recoveredGateway && restartPort > 0)
-                restartDeadlineUtc = DateTime.UtcNow + StartupTimeout;
+            {
+                desiredRunning = true;
+                SetStatusLocked(new UnityMcpGatewayStatus
+                {
+                    State = UnityMcpGatewayState.Starting,
+                    Message = "Waiting for the Unity bridge before restarting the gateway.",
+                    Port = restartPort,
+                    Endpoint = BuildEndpoint(restartPort, restartMcpPath)
+                });
+            }
             else restartAfterAssemblyReload = false;
+            if (recoveredGateway)
+            {
+                desiredRunning = true;
+            }
             AssemblyReloadEvents.beforeAssemblyReload += StopForAssemblyReload;
             EditorApplication.quitting += Stop;
             EditorApplication.update += Tick;
@@ -178,6 +307,11 @@ namespace DucMinh.UnityMcp.Editor
 
             lock (Gate)
             {
+                if (status.IsRunning)
+                {
+                    error = "Stop the gateway before changing its executable, port, path, or logging settings.";
+                    return false;
+                }
                 EditorPrefs.SetString(PreferenceKey("executablePath"), executablePath);
                 EditorPrefs.SetInt(PreferenceKey("preferredPort"), settings.PreferredPort);
                 EditorPrefs.SetString(PreferenceKey("mcpPath"), mcpPath);
@@ -198,28 +332,45 @@ namespace DucMinh.UnityMcp.Editor
         /// </summary>
         public static bool Start(out string error)
         {
-            return Start(out error, null, false);
+            return Start(out error, null, false, null, false);
         }
 
         /// <summary>Starts the gateway, optionally reserving one exact loopback port for a restart.</summary>
-        private static bool Start(out string error, int? requiredPort, bool requireExactPort)
+        private static bool Start(out string error, int? requiredPort, bool requireExactPort, string requiredMcpPath, bool automaticRestart)
         {
             error = null;
             UnityMcpGatewayStatus changedStatus = null;
 
             lock (Gate)
             {
-                restartAfterAssemblyReload = false;
-                SessionState.EraseBool(SessionKey("restartAfterReload"));
                 RefreshProcessStateLocked();
-                if (status.IsRunning)
+                if (automaticRestart && !desiredRunning)
                 {
+                    error = "The automatic gateway restart was cancelled.";
+                    return false;
+                }
+                if (gatewayProcess != null && status.IsRunning)
+                {
+                    if (automaticRestart) return true;
                     error = "UnityMCP gateway is already running.";
                     return false;
                 }
+                if (!automaticRestart)
+                {
+                    desiredRunning = false;
+                    restartPolicy.Reset();
+                    restartAfterAssemblyReload = false;
+                    restartAfterGatewayExit = false;
+                    SessionState.EraseBool(SessionKey("restartAfterReload"));
+                    SessionState.EraseString(SessionKey("restartPort"));
+                    SessionState.EraseString(SessionKey("restartMcpPath"));
+                }
 
                 var settings = GetSettings();
-                if (!IsValidMcpPath(settings.McpPath))
+                var launchMcpPath = string.IsNullOrWhiteSpace(requiredMcpPath)
+                    ? settings.McpPath
+                    : NormalizeMcpPath(requiredMcpPath);
+                if (!IsValidMcpPath(launchMcpPath))
                 {
                     error = "MCP path is invalid. Save a path beginning with '/'.";
                     SetStatusLocked(CreateErrorStatus(error));
@@ -238,9 +389,14 @@ namespace DucMinh.UnityMcp.Editor
                     else
                     {
                         var descriptor = FindCurrentEditorDescriptor();
+                        string bridgeStartupError = null;
+                        if (descriptor == null && UnityMcpEditorBootstrap.EnsureStarted(out bridgeStartupError))
+                            descriptor = FindCurrentEditorDescriptor();
                         if (descriptor == null)
                         {
-                            error = "UnityMCP Editor bridge is not ready. Wait for UnityMCP to finish starting, then try again.";
+                            error = string.IsNullOrWhiteSpace(bridgeStartupError)
+                                ? "UnityMCP Editor bridge is not ready. Wait for UnityMCP to finish starting, then try again."
+                                : "UnityMCP Editor bridge is not ready. " + Sanitize(bridgeStartupError);
                             SetStatusLocked(CreateErrorStatus(error));
                             changedStatus = SnapshotStatusLocked();
                         }
@@ -260,10 +416,11 @@ namespace DucMinh.UnityMcp.Editor
                             else
                             {
                                 var token = GetOrCreateBearerToken();
+                                Process process = null;
                                 try
                                 {
-                                    var startInfo = BuildStartInfo(executablePath, descriptor.instanceId, port, settings.McpPath, token);
-                                    var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+                                    var startInfo = BuildStartInfo(executablePath, descriptor.instanceId, port, launchMcpPath, token);
+                                    process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
                                     process.Exited += OnGatewayProcessExited;
                                     process.OutputDataReceived += OnGatewayOutput;
                                     process.ErrorDataReceived += OnGatewayError;
@@ -279,16 +436,20 @@ namespace DucMinh.UnityMcp.Editor
                                     gatewayReady = false;
                                     startedAtUtc = DateTime.UtcNow;
                                     recentLogs.Clear();
-                                    PersistOwnedGatewayLocked(process, port, descriptor.instanceId);
+                                    ResetHealthProbeLocked();
+                                    PersistOwnedGatewayLocked(process, port, descriptor.instanceId, launchMcpPath);
                                     process.BeginOutputReadLine();
                                     process.BeginErrorReadLine();
+                                    activeMcpPath = launchMcpPath;
+                                    desiredRunning = true;
+                                    nextHealthProbeUtc = DateTime.UtcNow + HealthProbeInterval;
                                     SetStatusLocked(new UnityMcpGatewayStatus
                                     {
                                         State = UnityMcpGatewayState.Starting,
                                         Message = $"Starting UnityMCP HTTP gateway on 127.0.0.1:{port}.",
                                         Port = port,
                                         ProcessId = process.Id,
-                                        Endpoint = BuildEndpoint(port, settings.McpPath),
+                                        Endpoint = BuildEndpoint(port, launchMcpPath),
                                         InstanceId = descriptor.instanceId
                                     });
                                     changedStatus = SnapshotStatusLocked();
@@ -296,7 +457,19 @@ namespace DucMinh.UnityMcp.Editor
                                 catch (Exception exception)
                                 {
                                     error = "Could not start unity-mcp: " + Sanitize(exception.Message);
-                                    DisposeGatewayProcessLocked();
+                                    // A failure after Process.Start (for example while persisting ownership or
+                                    // attaching output readers) must not leave an untracked child holding the port.
+                                    if (ReferenceEquals(process, gatewayProcess))
+                                    {
+                                        expectedStop = true;
+                                        StopGatewayProcessLocked();
+                                    }
+                                    else if (process != null)
+                                    {
+                                        try { if (!process.HasExited) process.Kill(); } catch { }
+                                        try { process.Dispose(); } catch { }
+                                    }
+                                    if (!automaticRestart) desiredRunning = false;
                                     ClearPersistedGatewayLocked();
                                     SetStatusLocked(CreateErrorStatus(error));
                                     changedStatus = SnapshotStatusLocked();
@@ -323,7 +496,14 @@ namespace DucMinh.UnityMcp.Editor
                 restartAfterAssemblyReload = false;
                 restartAfterGatewayExit = false;
                 restartPort = 0;
+                restartMcpPath = null;
+                activeMcpPath = null;
+                desiredRunning = false;
+                restartPolicy.Reset();
+                ResetHealthProbeLocked();
                 SessionState.EraseBool(SessionKey("restartAfterReload"));
+                SessionState.EraseString(SessionKey("restartPort"));
+                SessionState.EraseString(SessionKey("restartMcpPath"));
                 expectedStop = true;
                 StopGatewayProcessLocked();
                 ClearPersistedGatewayLocked();
@@ -346,11 +526,13 @@ namespace DucMinh.UnityMcp.Editor
                 {
                     SessionState.SetBool(SessionKey("restartAfterReload"), true);
                     SessionState.SetString(SessionKey("restartPort"), status.Port.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    SessionState.SetString(SessionKey("restartMcpPath"), activeMcpPath ?? restartMcpPath ?? DefaultMcpPath);
                 }
                 else
                 {
                     SessionState.EraseBool(SessionKey("restartAfterReload"));
                     SessionState.EraseString(SessionKey("restartPort"));
+                    SessionState.EraseString(SessionKey("restartMcpPath"));
                 }
                 restartAfterAssemblyReload = false;
                 SetStatusLocked(status.IsRunning
@@ -550,11 +732,13 @@ namespace DucMinh.UnityMcp.Editor
         private static void Tick()
         {
             UnityMcpGatewayStatus changedStatus = null;
-            var startAfterReload = false;
-            var restartForBridgeReplacement = false;
+            var beginAutomaticRestart = false;
+            var automaticRestartPort = 0;
+            string automaticRestartMcpPath = null;
             lock (Gate)
             {
                 if (RefreshProcessStateLocked()) changedStatus = SnapshotStatusLocked();
+                var nowUtc = DateTime.UtcNow;
 
                 // Normally the Editor bridge reuses its descriptor across a domain reload and
                 // the gateway can remain connected. If the bridge had to fall back to a new
@@ -573,7 +757,9 @@ namespace DucMinh.UnityMcp.Editor
                     // port, leaving long-lived Streamable HTTP clients on the retired URL.
                     restartAfterGatewayExit = true;
                     restartPort = status.Port;
+                    restartMcpPath = activeMcpPath ?? DefaultMcpPath;
                     expectedStop = true;
+                    ResetHealthProbeLocked();
                     KillGatewayProcessLocked();
                     SetStatusLocked(new UnityMcpGatewayStatus
                     {
@@ -590,33 +776,236 @@ namespace DucMinh.UnityMcp.Editor
                 if (restartAfterGatewayExit && gatewayProcess == null && FindCurrentEditorDescriptor() != null)
                 {
                     restartAfterGatewayExit = false;
-                    restartForBridgeReplacement = true;
+                    ScheduleAutomaticRestartLocked(
+                        nowUtc,
+                        restartPort,
+                        restartMcpPath,
+                        "The Unity bridge identity changed and the previous gateway was stopped.");
+                    changedStatus = SnapshotStatusLocked();
                 }
 
-                if (restartAfterAssemblyReload)
+                if (restartAfterAssemblyReload && FindCurrentEditorDescriptor() != null)
                 {
-                    if (FindCurrentEditorDescriptor() != null)
-                    {
-                        restartAfterAssemblyReload = false;
-                        startAfterReload = true;
-                    }
-                    else if (DateTime.UtcNow >= restartDeadlineUtc)
-                    {
-                        restartAfterAssemblyReload = false;
-                        SetStatusLocked(CreateErrorStatus("UnityMCP bridge did not become ready after the domain reload."));
-                        changedStatus = SnapshotStatusLocked();
-                    }
+                    restartAfterAssemblyReload = false;
+                    ScheduleAutomaticRestartLocked(
+                        nowUtc,
+                        restartPort,
+                        restartMcpPath,
+                        "The gateway process exited while Unity was reloading its managed domain.");
+                    changedStatus = SnapshotStatusLocked();
+                }
+
+                if (UpdateHealthProbeLocked(nowUtc)) changedStatus = SnapshotStatusLocked();
+
+                if (gatewayProcess != null && status.State == UnityMcpGatewayState.Running)
+                    restartPolicy.ObserveRunning(nowUtc);
+
+                // Do not consume an attempt while the bridge itself is unavailable. Its own
+                // update-based bootstrap keeps retrying, and Stop remains available to cancel
+                // the desired-running intent.
+                if (desiredRunning
+                    && FindCurrentEditorDescriptor() != null
+                    && restartPolicy.TryBeginAttempt(nowUtc, out automaticRestartPort, out automaticRestartMcpPath))
+                {
+                    beginAutomaticRestart = true;
                 }
             }
             if (changedStatus != null && changedStatus.State == UnityMcpGatewayState.Running)
                 RefreshManagedProjectConfigurations();
             if (changedStatus != null) RaiseStatusChanged(changedStatus);
-            if (startAfterReload)
+
+            if (beginAutomaticRestart
+                && !Start(out var restartError, automaticRestartPort, true, automaticRestartMcpPath, true))
             {
-                if (restartPort > 0) Start(out _, restartPort, true);
-                else Start(out _);
+                UnityMcpGatewayStatus retryStatus;
+                lock (Gate)
+                {
+                    if (desiredRunning)
+                        ScheduleAutomaticRestartLocked(
+                            DateTime.UtcNow,
+                            automaticRestartPort,
+                            automaticRestartMcpPath,
+                            string.IsNullOrWhiteSpace(restartError) ? "The automatic gateway restart failed." : restartError);
+                    retryStatus = SnapshotStatusLocked();
+                }
+                RaiseStatusChanged(retryStatus);
             }
-            if (restartForBridgeReplacement) Start(out _, restartPort, true);
+        }
+
+        private static bool UpdateHealthProbeLocked(DateTime nowUtc)
+        {
+            var canProbe = gatewayProcess != null
+                && (status.State == UnityMcpGatewayState.Running
+                    || (status.State == UnityMcpGatewayState.Starting && healthRequiredBeforeRunning));
+            if (!canProbe)
+            {
+                if (healthProbeTask != null || healthProbeCancellation != null) ResetHealthProbeLocked();
+                return false;
+            }
+
+            if (healthProbeTask != null)
+            {
+                if (!healthProbeTask.IsCompleted) return false;
+
+                bool healthy;
+                try { healthy = healthProbeTask.GetAwaiter().GetResult(); }
+                catch { healthy = false; }
+                healthProbeTask = null;
+                try { healthProbeCancellation?.Dispose(); } catch { }
+                healthProbeCancellation = null;
+
+                if (healthy)
+                {
+                    healthPolicy.Observe(true);
+                    nextHealthProbeUtc = nowUtc + HealthProbeInterval;
+                    if (!healthRequiredBeforeRunning) return false;
+
+                    healthRequiredBeforeRunning = false;
+                    gatewayReady = true;
+                    status.State = UnityMcpGatewayState.Running;
+                    status.Message = $"UnityMCP HTTP gateway recovered and is healthy on {status.Endpoint}.";
+                    restartPolicy.MarkRunning(nowUtc);
+                    return true;
+                }
+
+                nextHealthProbeUtc = nowUtc + HealthProbeFailureRetryInterval;
+                if (!healthPolicy.Observe(false)) return false;
+
+                var previousPort = status.Port;
+                var previousMcpPath = activeMcpPath ?? restartMcpPath ?? DefaultMcpPath;
+                var reason = "The gateway loopback listener failed "
+                    + UnityMcpGatewayHealthPolicy.FailureThreshold
+                    + " consecutive health probes.";
+                expectedStop = true;
+                StopGatewayProcessLocked();
+                ClearPersistedGatewayLocked();
+                if (desiredRunning)
+                    ScheduleAutomaticRestartLocked(nowUtc, previousPort, previousMcpPath, reason);
+                else
+                    SetStatusLocked(CreateErrorStatus(reason));
+                return true;
+            }
+
+            if (nowUtc < nextHealthProbeUtc || status.Port < 1 || status.Port > 65535) return false;
+            var healthMcpPath = activeMcpPath ?? restartMcpPath ?? DefaultMcpPath;
+            healthProbeCancellation = new CancellationTokenSource();
+            healthProbeTask = ProbeLoopbackAsync(
+                status.Port,
+                healthMcpPath,
+                HealthProbeTimeoutMilliseconds,
+                healthProbeCancellation.Token);
+            return false;
+        }
+
+        private static async Task<bool> ProbeLoopbackAsync(
+            int port,
+            string mcpPath,
+            int timeoutMilliseconds,
+            CancellationToken cancellationToken)
+        {
+            const int responsePrefixLength = 9;
+            if (port < 1
+                || port > 65535
+                || !IsValidMcpPath(mcpPath)
+                || timeoutMilliseconds <= 0
+                || cancellationToken.IsCancellationRequested)
+                return false;
+
+            using (var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            using (var client = new TcpClient(AddressFamily.InterNetwork))
+            {
+                timeoutCancellation.CancelAfter(timeoutMilliseconds);
+                var probeToken = timeoutCancellation.Token;
+                using (probeToken.Register(() =>
+                {
+                    try { client.Close(); } catch { }
+                }))
+                {
+                    try
+                    {
+                        await client.ConnectAsync(IPAddress.Loopback, port).ConfigureAwait(false);
+                        var request = Encoding.ASCII.GetBytes(
+                            "GET " + mcpPath + " HTTP/1.1\r\n"
+                            + "Host: 127.0.0.1:" + port + "\r\n"
+                            + "Connection: close\r\n"
+                            + "Accept: */*\r\n\r\n");
+                        var stream = client.GetStream();
+                        await stream.WriteAsync(request, 0, request.Length, probeToken).ConfigureAwait(false);
+
+                        var responsePrefix = new byte[responsePrefixLength];
+                        var bytesRead = 0;
+                        while (bytesRead < responsePrefix.Length)
+                        {
+                            var count = await stream.ReadAsync(
+                                responsePrefix,
+                                bytesRead,
+                                responsePrefix.Length - bytesRead,
+                                probeToken).ConfigureAwait(false);
+                            if (count <= 0) return false;
+                            bytesRead += count;
+                        }
+                        return IsHttpResponsePrefix(Encoding.ASCII.GetString(responsePrefix, 0, bytesRead));
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        internal static bool IsHttpResponsePrefix(string response)
+        {
+            return !string.IsNullOrEmpty(response)
+                && response.Length >= 9
+                && response.StartsWith("HTTP/1.", StringComparison.Ordinal)
+                && response[7] >= '0'
+                && response[7] <= '9'
+                && response[8] == ' ';
+        }
+
+        private static void ResetHealthProbeLocked()
+        {
+            var cancellation = healthProbeCancellation;
+            healthProbeCancellation = null;
+            healthProbeTask = null;
+            try { cancellation?.Cancel(); } catch { }
+            try { cancellation?.Dispose(); } catch { }
+            healthPolicy.Reset();
+            healthRequiredBeforeRunning = false;
+            nextHealthProbeUtc = DateTime.MinValue;
+        }
+
+        private static bool ScheduleAutomaticRestartLocked(DateTime nowUtc, int port, string mcpPath, string reason)
+        {
+            mcpPath = NormalizeMcpPath(mcpPath);
+            if (!desiredRunning || !restartPolicy.Schedule(nowUtc, port, mcpPath, reason))
+            {
+                desiredRunning = false;
+                var suffix = restartPolicy.AttemptCount >= UnityMcpGatewayRestartPolicy.MaxAttempts
+                    ? " Automatic restart stopped after " + UnityMcpGatewayRestartPolicy.MaxAttempts + " attempts."
+                    : string.Empty;
+                SetStatusLocked(CreateErrorStatus((string.IsNullOrWhiteSpace(reason) ? "UnityMCP gateway stopped unexpectedly." : Sanitize(reason)) + suffix));
+                return false;
+            }
+
+            var descriptor = FindCurrentEditorDescriptor();
+            SetStatusLocked(new UnityMcpGatewayStatus
+            {
+                State = UnityMcpGatewayState.Starting,
+                Message = "Gateway stopped unexpectedly; automatic restart "
+                    + (restartPolicy.AttemptCount + 1)
+                    + "/"
+                    + UnityMcpGatewayRestartPolicy.MaxAttempts
+                    + " is scheduled.",
+                LastError = Sanitize(reason),
+                Port = port,
+                Endpoint = BuildEndpoint(port, mcpPath),
+                InstanceId = descriptor?.instanceId
+            });
+            restartPort = port;
+            restartMcpPath = mcpPath;
+            return true;
         }
 
         private static void RefreshManagedProjectConfigurations()
@@ -646,29 +1035,50 @@ namespace DucMinh.UnityMcp.Editor
             if (exited)
             {
                 var exitCode = TryGetExitCode(gatewayProcess);
-                var message = expectedStop
+                var wasExpected = expectedStop;
+                var previousPort = status.Port;
+                var previousMcpPath = activeMcpPath ?? restartMcpPath ?? DefaultMcpPath;
+                var message = wasExpected
                     ? "Gateway is stopped."
                     : BuildExitedMessage(exitCode);
+                ResetHealthProbeLocked();
                 DisposeGatewayProcessLocked();
                 ClearPersistedGatewayLocked();
-                SetStatusLocked(expectedStop ? NewStoppedStatus(message) : CreateErrorStatus(message));
                 expectedStop = false;
                 processExited = false;
+                if (wasExpected)
+                    SetStatusLocked(NewStoppedStatus(message));
+                else if (desiredRunning)
+                    ScheduleAutomaticRestartLocked(DateTime.UtcNow, previousPort, previousMcpPath, message);
+                else
+                    SetStatusLocked(CreateErrorStatus(message));
                 return true;
             }
 
-            if (status.State == UnityMcpGatewayState.Starting && gatewayReady)
+            if (status.State == UnityMcpGatewayState.Starting && gatewayReady && !healthRequiredBeforeRunning)
             {
                 status.State = UnityMcpGatewayState.Running;
                 status.Message = $"UnityMCP HTTP gateway is running on {status.Endpoint}.";
+                restartPolicy.MarkRunning(DateTime.UtcNow);
                 return true;
             }
-            if (status.State == UnityMcpGatewayState.Starting && DateTime.UtcNow - startedAtUtc > StartupTimeout)
+            if (status.State == UnityMcpGatewayState.Starting
+                && !healthRequiredBeforeRunning
+                && DateTime.UtcNow - startedAtUtc > StartupTimeout)
             {
+                var previousPort = status.Port;
+                var previousMcpPath = activeMcpPath ?? restartMcpPath ?? DefaultMcpPath;
                 expectedStop = true;
                 StopGatewayProcessLocked();
                 ClearPersistedGatewayLocked();
-                SetStatusLocked(CreateErrorStatus("unity-mcp did not report readiness within 15 seconds."));
+                if (desiredRunning)
+                    ScheduleAutomaticRestartLocked(
+                        DateTime.UtcNow,
+                        previousPort,
+                        previousMcpPath,
+                        "unity-mcp did not report readiness within 15 seconds.");
+                else
+                    SetStatusLocked(CreateErrorStatus("unity-mcp did not report readiness within 15 seconds."));
                 return true;
             }
             return false;
@@ -779,22 +1189,48 @@ namespace DucMinh.UnityMcp.Editor
             }
         }
 
-        private static void OnGatewayOutput(object sender, DataReceivedEventArgs args) => AddLogLine(args.Data);
-        private static void OnGatewayError(object sender, DataReceivedEventArgs args) => AddLogLine(args.Data);
+        private static void OnGatewayOutput(object sender, DataReceivedEventArgs args) => AddLogLine(sender, args.Data);
+        private static void OnGatewayError(object sender, DataReceivedEventArgs args) => AddLogLine(sender, args.Data);
 
-        private static void AddLogLine(string line)
+        private static void AddLogLine(object sender, string line)
         {
             if (string.IsNullOrWhiteSpace(line)) return;
             lock (Gate)
             {
-                if (line.StartsWith("UNITY_MCP_READY ", StringComparison.Ordinal)) gatewayReady = true;
+                // DataReceived callbacks may already be queued when an old Process is disposed.
+                // Never let stale output mutate readiness or diagnostics for its replacement.
+                if (!ReferenceEquals(sender, gatewayProcess)) return;
+                if (IsReadyEventForPort(line, status.Port)) gatewayReady = true;
                 recentLogs.Enqueue(Sanitize(line));
                 while (recentLogs.Count > MaxLogLines) recentLogs.Dequeue();
             }
         }
 
+        internal static bool IsReadyEventForPort(string line, int expectedPort)
+        {
+            const string prefix = "UNITY_MCP_READY ";
+            if (string.IsNullOrWhiteSpace(line) || !line.StartsWith(prefix, StringComparison.Ordinal)) return false;
+            var payload = line.Substring(prefix.Length).Trim();
+            if (!payload.StartsWith("{", StringComparison.Ordinal)) return true;
+            try
+            {
+                var ready = JObject.Parse(payload);
+                var portToken = ready["port"];
+                return portToken != null
+                    && portToken.Type == JTokenType.Integer
+                    && portToken.Value<int>() == expectedPort;
+            }
+            catch
+            {
+                // A malformed JSON-shaped READY event is not trustworthy. Legacy, non-JSON
+                // events remain accepted for compatibility with older gateway executables.
+                return false;
+            }
+        }
+
         private static void StopGatewayProcessLocked()
         {
+            ResetHealthProbeLocked();
             if (gatewayProcess == null) return;
             KillGatewayProcessLocked();
             DisposeGatewayProcessLocked();
@@ -841,36 +1277,46 @@ namespace DucMinh.UnityMcp.Editor
             var rawStartedTicks = SessionState.GetString(SessionKey("startedTicks"), string.Empty);
             var rawPort = SessionState.GetString(SessionKey("port"), string.Empty);
             var instanceId = SessionState.GetString(SessionKey("instanceId"), string.Empty);
+            var persistedMcpPath = NormalizeMcpPath(SessionState.GetString(SessionKey("mcpPath"), GetSettings().McpPath));
             if (!int.TryParse(rawPid, out var pid)
                 || !long.TryParse(rawStartedTicks, out var startedTicks)
                 || !int.TryParse(rawPort, out var port)
                 || port < 1 || port > 65535
-                || !IsSafeArgumentToken(instanceId))
+                || !IsSafeArgumentToken(instanceId)
+                || !IsValidMcpPath(persistedMcpPath))
             {
                 ClearPersistedGateway();
                 return false;
             }
+            Process process = null;
+            var ownershipVerified = false;
             try
             {
-                var process = Process.GetProcessById(pid);
+                process = Process.GetProcessById(pid);
                 if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != startedTicks)
                 {
                     process.Dispose();
                     ClearPersistedGateway();
                     return false;
                 }
+                ownershipVerified = true;
 
                 process.EnableRaisingEvents = true;
                 process.Exited += OnGatewayProcessExited;
                 gatewayProcess = process;
                 expectedStop = false;
                 processExited = false;
-                gatewayReady = true;
-                var endpoint = BuildEndpoint(port, GetSettings().McpPath);
+                gatewayReady = false;
+                ResetHealthProbeLocked();
+                healthRequiredBeforeRunning = true;
+                nextHealthProbeUtc = DateTime.MinValue;
+                startedAtUtc = DateTime.UtcNow;
+                activeMcpPath = persistedMcpPath;
+                var endpoint = BuildEndpoint(port, persistedMcpPath);
                 SetStatusLocked(new UnityMcpGatewayStatus
                 {
-                    State = UnityMcpGatewayState.Running,
-                    Message = "UnityMCP HTTP gateway recovered after the Unity domain reload.",
+                    State = UnityMcpGatewayState.Starting,
+                    Message = "Validating the recovered UnityMCP gateway loopback listener.",
                     Port = port,
                     ProcessId = pid,
                     Endpoint = endpoint,
@@ -880,20 +1326,42 @@ namespace DucMinh.UnityMcp.Editor
             }
             catch
             {
-                // The PID may be gone, reused, or inaccessible. Never touch an unverified
-                // process; simply discard the stale ownership record.
+                // The PID may be gone, reused, or inaccessible. Never kill an unverified
+                // process. Once PID + StartTime prove ownership, recovery must fail closed so a
+                // setup error cannot leave an untracked child holding the configured port.
+                if (ownershipVerified && process != null)
+                {
+                    if (ReferenceEquals(process, gatewayProcess))
+                    {
+                        expectedStop = true;
+                        StopGatewayProcessLocked();
+                    }
+                    else
+                    {
+                        try { process.Exited -= OnGatewayProcessExited; } catch { }
+                        try { if (!process.HasExited) process.Kill(); } catch { }
+                        try { process.Dispose(); } catch { }
+                    }
+                }
+                else
+                {
+                    try { process?.Dispose(); } catch { }
+                }
                 ClearPersistedGateway();
                 return false;
             }
         }
 
-        private static void PersistOwnedGatewayLocked(Process process, int port, string instanceId)
+        private static void PersistOwnedGatewayLocked(Process process, int port, string instanceId, string mcpPath)
         {
+            var startedTicks = process.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            SessionState.SetString(SessionKey("startedTicks"), startedTicks);
+            if (!string.Equals(SessionState.GetString(SessionKey("startedTicks"), string.Empty), startedTicks, StringComparison.Ordinal))
+                throw new InvalidOperationException("Could not persist the gateway process start time.");
             SessionState.SetString(SessionKey("pid"), process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            try { SessionState.SetString(SessionKey("startedTicks"), process.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
-            catch { SessionState.EraseString(SessionKey("startedTicks")); }
             SessionState.SetString(SessionKey("port"), port.ToString(System.Globalization.CultureInfo.InvariantCulture));
             SessionState.SetString(SessionKey("instanceId"), instanceId ?? string.Empty);
+            SessionState.SetString(SessionKey("mcpPath"), NormalizeMcpPath(mcpPath));
         }
 
         private static void ClearPersistedGatewayLocked() => ClearPersistedGateway();
@@ -904,6 +1372,7 @@ namespace DucMinh.UnityMcp.Editor
             SessionState.EraseString(SessionKey("startedTicks"));
             SessionState.EraseString(SessionKey("port"));
             SessionState.EraseString(SessionKey("instanceId"));
+            SessionState.EraseString(SessionKey("mcpPath"));
         }
 
         private static string GetOrCreateBearerToken()

@@ -189,7 +189,17 @@ namespace DucMinh.UnityMcp
                 }
                 if (request.Method == "DELETE")
                 {
-                    if (!UnityMcpJobStore.Shared.Cancel(id, out var job)) { await WriteJsonAsync(stream, 404, UnityMcpResult.Error("Unknown job."), null, serverToken); return; }
+                    if (!UnityMcpJobStore.Shared.TryGet(id, out var job)) { await WriteJsonAsync(stream, 404, UnityMcpResult.Error("Unknown job.", "job_not_found"), null, serverToken); return; }
+                    if (!job.CanCancel)
+                    {
+                        await WriteJsonAsync(stream, 409, UnityMcpResult.Error("The job does not support cancellation or is already terminal.", "job_not_cancellable"), null, serverToken);
+                        return;
+                    }
+                    if (!UnityMcpJobStore.Shared.Cancel(id, out job))
+                    {
+                        await WriteJsonAsync(stream, 409, UnityMcpResult.Error("The job can no longer be cancelled.", "job_not_cancellable"), null, serverToken);
+                        return;
+                    }
                     await WriteJsonAsync(stream, 200, JobResponse(job), null, serverToken); return;
                 }
             }
@@ -223,7 +233,8 @@ namespace DucMinh.UnityMcp
 
         private static object JobResponse(UnityMcpJob job) => new
         {
-            job.jobId, job.status, job.result, job.error
+            job.jobId, job.jobType, job.cancellable, job.status, job.progress, job.progressMessage,
+            job.createdUtc, job.startedUtc, job.completedUtc, job.durationMilliseconds, job.result, job.error
         };
 
         private static async Task<HttpRequest> ReadRequestAsync(NetworkStream stream, CancellationToken cancellationToken)

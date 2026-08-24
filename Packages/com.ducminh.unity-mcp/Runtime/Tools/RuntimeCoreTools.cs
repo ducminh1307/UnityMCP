@@ -46,10 +46,13 @@ namespace DucMinh.UnityMcp
     [Serializable] public sealed class ComponentRemoveInput { public int? instanceId; public string path; public string type; public int componentIndex; public bool apply; }
     [Serializable] public sealed class ComponentSetPropertyInput { public int? instanceId; public string path; public string type; public int componentIndex; public string property; public string valueJson; public bool apply; }
     [Serializable] public sealed class JobInput { public string jobId; }
-    [Serializable] public sealed class JobOutput { public string jobId; public string jobType; public string status; public float progress; public string progressMessage; public string createdUtc; public string startedUtc; public string completedUtc; public long durationMilliseconds; public string resultJson; public string error; }
+    [Serializable] public sealed class JobOutput { public string jobId; public string jobType; public bool cancellable; public bool canCancel; public string status; public float progress; public string progressMessage; public string createdUtc; public string startedUtc; public string completedUtc; public long durationMilliseconds; public string resultJson; public string error; }
 
     public static class RuntimeCoreTools
     {
+        private const long ScreenshotResponseLimitBytes = 16L * 1024L * 1024L;
+        private const long ScreenshotJsonReserveBytes = 512L * 1024L;
+        private const long ScreenshotPngOverheadReserveBytes = 64L * 1024L;
         private static readonly Dictionary<string, Dictionary<int, string>> HierarchySnapshots = new Dictionary<string, Dictionary<int, string>>(StringComparer.Ordinal);
         [UnityMcpTool("unity-status", Title = "Unity status", Description = "Return the connected Unity target status.", Category = "system", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.SafeRead, DefaultEnabled = true)]
         public static UnityStatusOutput UnityStatus(EmptyInput input) => new UnityStatusOutput
@@ -288,6 +291,7 @@ namespace DucMinh.UnityMcp
         [UnityMcpTool("job-get", Description = "Read one asynchronous UnityMCP job.", Category = "automation", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.SafeRead)]
         public static JobOutput JobGet(JobInput input)
         {
+            if (input == null || string.IsNullOrWhiteSpace(input.jobId)) throw new ArgumentException("jobId is required.");
             if (!UnityMcpJobStore.Shared.TryGet(input.jobId, out var job)) throw new ArgumentException("Unknown job.");
             return ToJobOutput(job);
         }
@@ -295,12 +299,16 @@ namespace DucMinh.UnityMcp
         [UnityMcpTool("job-cancel", Description = "Cancel one cancellable UnityMCP job.", Category = "automation", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write)]
         public static JobOutput JobCancel(JobInput input)
         {
-            if (!UnityMcpJobStore.Shared.Cancel(input.jobId, out var job)) throw new ArgumentException("Unknown job.");
+            if (input == null || string.IsNullOrWhiteSpace(input.jobId)) throw new ArgumentException("jobId is required.");
+            if (!UnityMcpJobStore.Shared.TryGet(input.jobId, out var job)) throw new ArgumentException("Unknown job.");
+            if (!job.CanCancel) throw new InvalidOperationException("The job does not support cancellation or is already terminal.");
+            if (!UnityMcpJobStore.Shared.Cancel(input.jobId, out job)) throw new InvalidOperationException("The job can no longer be cancelled.");
             return ToJobOutput(job);
         }
         private static JobOutput ToJobOutput(UnityMcpJob job) => new JobOutput
         {
-            jobId = job.jobId, jobType = job.jobType, status = job.status, progress = job.progress, progressMessage = job.progressMessage,
+            jobId = job.jobId, jobType = job.jobType, cancellable = job.cancellable, canCancel = job.CanCancel,
+            status = job.status, progress = job.progress, progressMessage = job.progressMessage,
             createdUtc = job.createdUtc, startedUtc = job.startedUtc, completedUtc = job.completedUtc, durationMilliseconds = job.durationMilliseconds,
             resultJson = job.result == null ? null : JsonConvert.SerializeObject(job.result), error = job.error
         };
@@ -309,9 +317,11 @@ namespace DucMinh.UnityMcp
         [UnityMcpTool("screenshot-game-view", Description = "Capture the Development Player framebuffer as PNG.", Category = "visual", Scope = UnityMcpScope.Runtime, Safety = UnityMcpSafety.SafeRead)]
         public static UnityMcpResult ScreenshotGameView(EmptyInput input)
         {
+            ValidateScreenshotResponseBudget(Screen.width, Screen.height);
             var texture = ScreenCapture.CaptureScreenshotAsTexture();
             try
             {
+                ValidateScreenshotResponseBudget(texture.width, texture.height);
                 var png = texture.EncodeToPNG();
                 return new UnityMcpResult
                 {
@@ -320,6 +330,16 @@ namespace DucMinh.UnityMcp
                 };
             }
             finally { UnityEngine.Object.Destroy(texture); }
+        }
+
+        public static void ValidateScreenshotResponseBudget(int width, int height)
+        {
+            if (width < 1 || height < 1) throw new InvalidOperationException("The framebuffer is not ready for capture.");
+            var pixels = checked((long)width * height);
+            var worstCasePngBytes = checked(pixels * 5L + ScreenshotPngOverheadReserveBytes);
+            var worstCaseBase64Bytes = checked(((worstCasePngBytes + 2L) / 3L) * 4L);
+            if (ScreenshotJsonReserveBytes + worstCaseBase64Bytes > ScreenshotResponseLimitBytes)
+                throw new InvalidOperationException("The framebuffer can exceed the 16 MiB encoded response budget; reduce the Development Player resolution before capture.");
         }
 
         internal static ChangeOutput Change(UnityMcpContext context, string summary, int? instanceId = null) => new ChangeOutput { dryRun = context.DryRun, changed = !context.DryRun, summary = summary, instanceId = instanceId };
@@ -353,11 +373,23 @@ namespace DucMinh.UnityMcp
 
         internal static GameObject RequireGameObject(int? instanceId, string path)
         {
-            GameObject result = null;
+            GameObject byInstanceId = null;
+            GameObject byPath = null;
             if (instanceId.HasValue)
-                result = AllSceneObjects().FirstOrDefault(go => go.GetInstanceID() == instanceId.Value);
-            else if (!string.IsNullOrWhiteSpace(path))
-                result = AllSceneObjects().FirstOrDefault(go => string.Equals(HierarchyPath(go), path, StringComparison.Ordinal));
+            {
+                byInstanceId = AllSceneObjects().FirstOrDefault(go => go.GetInstanceID() == instanceId.Value);
+                if (byInstanceId == null) throw new ArgumentException("GameObject instanceId was not found.");
+            }
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                var matches = AllSceneObjects().Where(go => string.Equals(HierarchyPath(go), path, StringComparison.Ordinal)).Take(2).ToArray();
+                if (matches.Length == 0) throw new ArgumentException("GameObject hierarchy path was not found.");
+                if (matches.Length > 1) throw new ArgumentException("GameObject hierarchy path is ambiguous; use a unique path or instanceId without path.");
+                byPath = matches[0];
+            }
+            if (byInstanceId != null && byPath != null && byInstanceId != byPath)
+                throw new ArgumentException("instanceId and path must identify the same GameObject.");
+            var result = byInstanceId ?? byPath;
             if (result == null) throw new ArgumentException("GameObject was not found; supply a valid instanceId or full hierarchy path.");
             return result;
         }

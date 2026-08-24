@@ -120,6 +120,22 @@ async def test_bridge_rejects_duplicate_json_keys() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bridge_maps_recursively_deep_json_to_invalid_response() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        content = b"[" * 10_000 + b"0" + b"]" * 10_000
+        return httpx.Response(200, headers={"Content-Type": "application/json"}, content=content)
+
+    async with httpx.AsyncClient(
+        base_url="http://127.0.0.1:45678", transport=httpx.MockTransport(handler)
+    ) as http_client:
+        bridge = UnityBridgeClient(instance(), client=http_client)
+        with pytest.raises(BridgeError) as error:
+            await bridge.fetch_tools()
+
+    assert error.value.code == "invalid_response"
+
+
+@pytest.mark.asyncio
 async def test_bridge_maps_sanitized_remote_error() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -11,12 +14,105 @@ from urllib.parse import unquote, urlsplit
 import mcp_types as types
 from mcp.server import Server, ServerRequestContext
 from mcp.server.lowlevel.server import NotificationOptions
-from mcp.server.subscriptions import InMemorySubscriptionBus, ListenHandler, ToolsListChanged
+from mcp.server.subscriptions import (
+    InMemorySubscriptionBus,
+    ListenHandler,
+    ResourcesListChanged,
+    ResourceUpdated,
+    ToolsListChanged,
+)
 from mcp.shared.exceptions import MCPError
 
 from .errors import BridgeError, SchemaValidationError
 from .models import RegistrySnapshot, ToolDescriptor
 from .service import ToolCallOutput, UnityGatewayService
+
+logger = logging.getLogger(__name__)
+
+_LEGACY_CONNECTION_LIMIT = 128
+_LEGACY_CONNECTION_TTL_SECONDS = 30 * 60
+_LEGACY_NOTIFICATION_TIMEOUT_SECONDS = 1.0
+
+
+class _LegacyConnectionRegistry:
+    """Bound legacy notification targets without retaining request-scoped sessions."""
+
+    def __init__(
+        self,
+        *,
+        limit: int = _LEGACY_CONNECTION_LIMIT,
+        ttl_seconds: float = _LEGACY_CONNECTION_TTL_SECONDS,
+        clock=time.monotonic,
+    ) -> None:
+        self._limit = limit
+        self._ttl_seconds = ttl_seconds
+        self._clock = clock
+        self._entries: OrderedDict[tuple[str, object], tuple[Any, float, object]] = OrderedDict()
+
+    @staticmethod
+    def _connection(ctx: ServerRequestContext[Any]) -> Any | None:
+        # ServerRequestContext currently exposes only a per-request ServerSession.
+        # Prefer the planned public Context.connection API when present and retain
+        # only the stable Connection object on the pinned SDK in the meantime.
+        connection = getattr(ctx, "connection", None)
+        if connection is None:
+            connection = getattr(ctx.session, "_connection", None)
+        return connection
+
+    @staticmethod
+    def _key(connection: Any) -> tuple[str, object]:
+        session_id = getattr(connection, "session_id", None)
+        if isinstance(session_id, str) and session_id:
+            return ("session", session_id)
+        return ("connection", id(connection))
+
+    def _discard(self, key: tuple[str, object], token: object) -> None:
+        current = self._entries.get(key)
+        if current is not None and current[2] is token:
+            self._entries.pop(key, None)
+
+    def _prune(self, now: float) -> None:
+        expired = [
+            key for key, (_, last_seen, _) in self._entries.items() if now - last_seen >= self._ttl_seconds
+        ]
+        for key in expired:
+            self._entries.pop(key, None)
+        while len(self._entries) > self._limit:
+            self._entries.popitem(last=False)
+
+    def remember(self, ctx: ServerRequestContext[Any]) -> None:
+        version = str(getattr(ctx, "protocol_version", "") or "")
+        if version.startswith("2026-"):
+            return
+        connection = self._connection(ctx)
+        if connection is None:
+            return
+        now = self._clock()
+        self._prune(now)
+        key = self._key(connection)
+        current = self._entries.get(key)
+        if current is not None and current[0] is connection:
+            self._entries[key] = (connection, now, current[2])
+            self._entries.move_to_end(key)
+            return
+        token = object()
+        self._entries[key] = (connection, now, token)
+        self._entries.move_to_end(key)
+        self._prune(now)
+        exit_stack = getattr(connection, "exit_stack", None)
+        if exit_stack is not None:
+            exit_stack.callback(self._discard, key, token)
+
+    def active(self) -> tuple[tuple[tuple[str, object], Any, object], ...]:
+        self._prune(self._clock())
+        return tuple((key, connection, token) for key, (connection, _, token) in self._entries.items())
+
+    def discard(self, key: tuple[str, object], token: object) -> None:
+        self._discard(key, token)
+
+    def __len__(self) -> int:
+        self._prune(self._clock())
+        return len(self._entries)
 
 
 class UnityMcpServer(Server[Any]):
@@ -108,12 +204,10 @@ def create_mcp_server(service: UnityGatewayService) -> Server[Any]:
     """Build one server bound to exactly one Unity instance."""
     bus = InMemorySubscriptionBus()
     listen_handler = ListenHandler(bus, max_subscriptions=128, max_buffered_events=64)
-    legacy_sessions: dict[int, Any] = {}
+    legacy_connections = _LegacyConnectionRegistry()
 
     def remember(ctx: ServerRequestContext[Any]) -> None:
-        version = str(getattr(ctx, "protocol_version", "") or "")
-        if not version.startswith("2026-"):
-            legacy_sessions[id(ctx.session)] = ctx.session
+        legacy_connections.remember(ctx)
 
     async def list_tools(
         ctx: ServerRequestContext[Any], params: types.PaginatedRequestParams | None
@@ -202,8 +296,14 @@ def create_mcp_server(service: UnityGatewayService) -> Server[Any]:
             parsed = urlsplit(uri)
             if parsed.scheme != "unity" or parsed.netloc != "jobs" or not parsed.path.startswith("/"):
                 raise MCPError(types.INVALID_PARAMS, "Unknown UnityMCP resource URI")
-            job_id = unquote(parsed.path[1:])
-            if not job_id or "/" in job_id or parsed.query or parsed.fragment:
+            encoded_job_id = parsed.path[1:]
+            if not encoded_job_id or "/" in encoded_job_id or parsed.query or parsed.fragment:
+                raise MCPError(types.INVALID_PARAMS, "Invalid Unity job resource URI")
+            try:
+                job_id = unquote(encoded_job_id, errors="strict")
+            except UnicodeError:
+                raise MCPError(types.INVALID_PARAMS, "Invalid Unity job resource URI") from None
+            if not job_id or "/" in job_id or "\\" in job_id:
                 raise MCPError(types.INVALID_PARAMS, "Invalid Unity job resource URI")
             try:
                 payload = await service.get_job(job_id)
@@ -221,15 +321,21 @@ def create_mcp_server(service: UnityGatewayService) -> Server[Any]:
 
     async def changed(_: RegistrySnapshot) -> None:
         await bus.publish(ToolsListChanged())
-        dead: list[int] = []
-        for session_id, session in tuple(legacy_sessions.items()):
+        await bus.publish(ResourcesListChanged())
+        await bus.publish(ResourceUpdated("unity://instance"))
+        await bus.publish(ResourceUpdated("unity://tools"))
+
+        async def notify_legacy(key: tuple[str, object], connection: Any, token: object) -> None:
             try:
-                await session.send_tool_list_changed()
-                await session.send_resource_list_changed()
+                async with asyncio.timeout(_LEGACY_NOTIFICATION_TIMEOUT_SECONDS):
+                    await connection.send_tool_list_changed()
+                    await connection.send_resource_list_changed()
             except Exception:
-                dead.append(session_id)
-        for session_id in dead:
-            legacy_sessions.pop(session_id, None)
+                legacy_connections.discard(key, token)
+
+        await asyncio.gather(
+            *(notify_legacy(key, connection, token) for key, connection, token in legacy_connections.active())
+        )
 
     service.registry.on_change(changed)
 
@@ -241,9 +347,16 @@ def create_mcp_server(service: UnityGatewayService) -> Server[Any]:
             yield service
         finally:
             stop.set()
-            await poll_task
-            listen_handler.close()
-            await service.bridge.aclose()
+            poll_task.cancel()
+            try:
+                await poll_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("UnityMCP registry poll stopped with an error during shutdown")
+            finally:
+                listen_handler.close()
+                await service.bridge.aclose()
 
     return UnityMcpServer(
         "unity-mcp",

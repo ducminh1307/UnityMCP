@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 from .bridge import UnityBridgeClient
 from .config import DEFAULT_LIMITS, GatewayLimits
@@ -146,10 +147,21 @@ class UnityGatewayService:
         meta = dict(meta_raw)
         job_id = raw.get("jobId")
         if job_id is not None:
-            if not isinstance(job_id, str) or not job_id or len(job_id) > 256:
+            if (
+                not isinstance(job_id, str)
+                or not job_id
+                or len(job_id) > 256
+                or any(ord(character) < 32 or ord(character) == 127 for character in job_id)
+                or "/" in job_id
+                or "\\" in job_id
+            ):
                 raise BridgeError("invalid_response", "Unity tool result jobId is invalid")
+            try:
+                encoded_job_id = quote(job_id, safe="")
+            except UnicodeError:
+                raise BridgeError("invalid_response", "Unity tool result jobId is invalid") from None
             meta["com.ducminh.unity-mcp/jobId"] = job_id
-            meta["com.ducminh.unity-mcp/jobUri"] = f"unity://jobs/{job_id}"
+            meta["com.ducminh.unity-mcp/jobUri"] = f"unity://jobs/{encoded_job_id}"
         meta["com.ducminh.unity-mcp/instanceId"] = self.descriptor.instance_id
         return ToolCallOutput(tuple(content), structured, is_error, meta)
 

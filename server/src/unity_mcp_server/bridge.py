@@ -256,7 +256,7 @@ class UnityBridgeClient:
                 object_pairs_hook=_reject_duplicate_keys,
                 parse_constant=_reject_non_json_constant,
             )
-        except (UnicodeError, json.JSONDecodeError, ValueError):
+        except (ValueError, RecursionError):
             raise BridgeError("invalid_response", "Unity returned malformed JSON") from None
 
     def _map_http_error(self, response: httpx.Response) -> BridgeError:

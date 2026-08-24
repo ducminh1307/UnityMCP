@@ -9,6 +9,9 @@ Development Player bridge. Production Players never start the bridge.
 Open **Window > UnityMCP > Tools**. Only the 20 built-in `safe-read` tools are enabled
 for a fresh project. Mutating and project-defined tools remain disabled until the local
 user enables each one. Mutating tools are dry-run by default and require `apply: true`.
+Use the **Allow Lists** page in the same window to create, select, and edit the
+project-owned Menu, Reflection, C# Command, and Batch policy ScriptableObjects.
+The UI edits those assets directly; MCP clients still cannot modify their own policy.
 
 The window is implemented with **UI Toolkit**. In addition to the tool-permission
 controls, it contains an optional **Editor-managed HTTP gateway** panel. This is a
@@ -76,10 +79,14 @@ action. Select **Stop gateway** before **Regenerate token**, then start the gate
 existing UnityMCP-managed Codex, Antigravity, and Claude entries are refreshed automatically.
 
 Unity starts the HTTP gateway with its own process ID as `--parent-pid`. The Python
-gateway watches that parent and exits when the Editor exits. Before a domain reload,
-Unity keeps its owned child running and reattaches it after the
-bridge is ready again. On Editor quit it stops the child permanently, so an old gateway
-does not remain attached to a later project session.
+gateway watches that parent and exits after three consecutive liveness failures, avoiding
+shutdown on one transient Windows process-query error. Before a domain reload, Unity keeps
+its owned child running, verifies the recovered HTTP listener, and reattaches it after the
+bridge is ready again. If the child exits unexpectedly or its HTTP listener stops responding,
+Unity retries the same endpoint up to six times with bounded exponential backoff. A deliberate
+**Stop gateway** cancels that restart intent. Gateway settings are immutable while it is
+starting or running. On Editor quit Unity stops the child permanently, so an old gateway does
+not remain attached to a later project session.
 
 ## Development Player
 

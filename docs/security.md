@@ -59,11 +59,14 @@ so clients must use the generated endpoint rather than guessing a port.
 
 Editor-managed HTTP processes receive `--parent-pid` for the exact Unity Editor that
 started them. The Python gateway validates that PID before starting and watches it
-thereafter; it exits when the parent is no longer live. Unity keeps the child it owns
-across a domain reload and reattaches that verified child after its bridge is ready
-again; it terminates the child permanently on Editor quit. This lifecycle isolation prevents a
-gateway from silently surviving as an unowned endpoint, but it is not a substitute for
-the bearer token or for keeping MCP connections scoped to the intended project.
+thereafter; it exits after three consecutive failed checks when the parent is no longer
+live, so one transient process-query failure does not tear down the endpoint. Unity keeps
+the child it owns across a domain reload and reattaches it only after verifying both the
+persisted PID/start time and HTTP responsiveness. Unexpected failures are retried on the
+same endpoint with a bounded attempt budget; explicit stop and Editor quit clear that
+restart intent. This lifecycle isolation prevents a gateway from silently surviving as an
+unowned endpoint, but it is not a substitute for the bearer token or for keeping MCP
+connections scoped to the intended project.
 
 ## Permissions and safety tiers
 
@@ -79,6 +82,11 @@ default. Safety metadata alone never grants default access. All project custom
 tools start disabled. Enablement is local per user and project; the Unity UI is
 the authority, and no MCP tool can enable another tool. Runtime enablement is a
 reviewed profile baked into a desktop Development Build.
+
+The Editor window's **Allow Lists** page is a local authoring surface for the
+Menu, Reflection, C# Command, and Batch policy ScriptableObjects stored under
+`Assets/`. It does not introduce an MCP mutation API: the ScriptableObject asset
+remains the reviewable project policy and only a local Editor user may edit it.
 
 Reflection, code execution, package/build mutation, and input simulation remain
 unsafe even when arguments appear read-only. Package-dependent tools are absent

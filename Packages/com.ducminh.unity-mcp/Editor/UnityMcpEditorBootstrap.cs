@@ -35,7 +35,11 @@ namespace DucMinh.UnityMcp.Editor
     [InitializeOnLoad]
     internal static class UnityMcpEditorBootstrap
     {
+        private const double StartupRetryDelaySeconds = 1d;
         private static UnityMcpHttpServer server;
+        private static bool startupInProgress;
+        private static double nextStartupAttemptAt;
+        private static string lastStartupError;
         private const string SessionDescriptorKey = "DucMinh.UnityMcp.EditorDescriptor";
         internal static UnityMcpRegistry Registry { get; private set; }
         internal static UnityMcpInstanceDescriptor Descriptor => server == null ? null : server.Descriptor;
@@ -50,31 +54,113 @@ namespace DucMinh.UnityMcp.Editor
             AssemblyReloadEvents.beforeAssemblyReload += Stop;
             EditorApplication.quitting += Stop;
             EditorApplication.update += UnityMcpMainThread.Pump;
+            // A different package can throw while Unity invokes the one-shot delayCall list,
+            // preventing callbacks later in that list from ever running. Keep an update-based
+            // fallback registered until the Editor bridge has started successfully.
+            EditorApplication.update += Start;
             EditorApplication.delayCall += Start;
         }
 
-        private static void Start()
+        private static void Start() => TryStart(false, out _);
+
+        internal static bool EnsureStarted(out string error) => TryStart(true, out error);
+
+        private static bool TryStart(bool force, out string error)
         {
-            if (server != null) return;
-            UnityMcpMainThread.Initialize(false);
-            UnityMcpRegistry.DiscoveryOverride = () => TypeCache.GetMethodsWithAttribute<UnityMcpToolAttribute>().Cast<MethodInfo>();
-            Registry = new UnityMcpRegistry(UnityMcpScope.Editor, new EditorEnablementStore());
-            Registry.Reload();
-            var debugLoggingEnabled = UnityMcpGatewayHost.GetSettings().DebugLoggingEnabled;
-            server = new UnityMcpHttpServer(Registry, UnityMcpScope.Editor, debugLoggingEnabled);
-            UnityMcpInstanceDescriptor preferred = null;
-            var stored = SessionState.GetString(SessionDescriptorKey, string.Empty);
-            if (!string.IsNullOrEmpty(stored))
+            error = null;
+            if (Registry != null && Descriptor != null)
             {
-                try { preferred = JsonConvert.DeserializeObject<UnityMcpInstanceDescriptor>(stored); } catch { }
+                StopStartupRetry();
+                return true;
             }
-            try { server.Start(preferred); }
-            catch when (preferred != null) { server.Dispose(); server = new UnityMcpHttpServer(Registry, UnityMcpScope.Editor, debugLoggingEnabled); server.Start(); }
-            SessionState.SetString(SessionDescriptorKey, JsonConvert.SerializeObject(server.Descriptor));
+            if (startupInProgress)
+            {
+                error = "UnityMCP Editor bridge is still starting.";
+                return false;
+            }
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating)
+            {
+                error = "Unity is still compiling or importing assets.";
+                return false;
+            }
+            if (!force && EditorApplication.timeSinceStartup < nextStartupAttemptAt) return false;
+
+            startupInProgress = true;
+            UnityMcpHttpServer nextServer = null;
+            try
+            {
+                // Discard an incomplete attempt. A usable bridge is only published after its
+                // listener and private discovery descriptor have both been created.
+                server?.Dispose();
+                server = null;
+                Registry = null;
+
+                UnityMcpMainThread.Initialize(false);
+                UnityMcpRegistry.DiscoveryOverride = () => TypeCache.GetMethodsWithAttribute<UnityMcpToolAttribute>().Cast<MethodInfo>();
+                var nextRegistry = new UnityMcpRegistry(UnityMcpScope.Editor, new EditorEnablementStore());
+                nextRegistry.Reload();
+                var debugLoggingEnabled = UnityMcpGatewayHost.GetSettings().DebugLoggingEnabled;
+                nextServer = new UnityMcpHttpServer(nextRegistry, UnityMcpScope.Editor, debugLoggingEnabled);
+                UnityMcpInstanceDescriptor preferred = null;
+                var stored = SessionState.GetString(SessionDescriptorKey, string.Empty);
+                if (!string.IsNullOrEmpty(stored))
+                {
+                    try { preferred = JsonConvert.DeserializeObject<UnityMcpInstanceDescriptor>(stored); } catch { }
+                }
+                try { nextServer.Start(preferred); }
+                catch when (preferred != null)
+                {
+                    nextServer.Dispose();
+                    nextServer = new UnityMcpHttpServer(nextRegistry, UnityMcpScope.Editor, debugLoggingEnabled);
+                    nextServer.Start();
+                }
+
+                Registry = nextRegistry;
+                server = nextServer;
+                nextServer = null;
+                try { SessionState.SetString(SessionDescriptorKey, JsonConvert.SerializeObject(server.Descriptor)); }
+                catch (Exception exception) { Debug.LogWarning("UnityMCP could not persist its Editor bridge identity: " + DescribeStartupException(exception)); }
+                lastStartupError = null;
+                nextStartupAttemptAt = 0d;
+                StopStartupRetry();
+                return true;
+            }
+            catch (Exception exception)
+            {
+                nextServer?.Dispose();
+                server?.Dispose();
+                server = null;
+                Registry = null;
+                error = DescribeStartupException(exception);
+                nextStartupAttemptAt = EditorApplication.timeSinceStartup + StartupRetryDelaySeconds;
+                if (!string.Equals(lastStartupError, error, StringComparison.Ordinal))
+                    Debug.LogError("UnityMCP Editor bridge failed to start: " + error);
+                lastStartupError = error;
+                return false;
+            }
+            finally
+            {
+                startupInProgress = false;
+            }
+        }
+
+        private static string DescribeStartupException(Exception exception)
+        {
+            var message = (exception?.Message ?? string.Empty).Replace('\r', ' ').Replace('\n', ' ').Trim();
+            if (message.Length > 512) message = message.Substring(0, 512);
+            var typeName = exception?.GetType().Name ?? "Exception";
+            return string.IsNullOrEmpty(message) ? typeName : typeName + ": " + message;
+        }
+
+        private static void StopStartupRetry()
+        {
+            EditorApplication.update -= Start;
+            EditorApplication.delayCall -= Start;
         }
 
         private static void Stop()
         {
+            StopStartupRetry();
             server?.Dispose();
             server = null;
         }
@@ -97,6 +183,7 @@ namespace DucMinh.UnityMcp.Editor
         {
             Connection,
             Tools,
+            AllowLists,
             Runtime
         }
 
@@ -151,6 +238,7 @@ namespace DucMinh.UnityMcp.Editor
         private ScrollView toolsScrollView;
         private VisualElement toolsContainer;
         private Button toolsPageButton;
+        private UnityMcpAllowListsView allowListsView;
 
         private Label runtimeProfileStatusLabel;
         private Button runtimePrimaryButton;
@@ -199,16 +287,20 @@ namespace DucMinh.UnityMcp.Editor
             var toolsPage = new VisualElement { name = "unity-mcp-tools-page" };
             toolsPage.AddToClassList("unity-mcp-page");
             toolsPage.style.flexGrow = 1;
+            var allowListsPage = CreateScrollPage("unity-mcp-allow-lists-page");
             var runtimePage = CreateScrollPage("unity-mcp-runtime-page");
             pages[Page.Connection] = connectionPage;
             pages[Page.Tools] = toolsPage;
+            pages[Page.AllowLists] = allowListsPage;
             pages[Page.Runtime] = runtimePage;
             pageHost.Add(connectionPage);
             pageHost.Add(toolsPage);
+            pageHost.Add(allowListsPage);
             pageHost.Add(runtimePage);
 
             BuildConnectionPage(connectionPage);
             BuildToolsPage(toolsPage);
+            BuildAllowListsPage(allowListsPage);
             BuildRuntimePage(runtimePage);
 
             LoadGatewaySettings();
@@ -273,6 +365,7 @@ namespace DucMinh.UnityMcp.Editor
             parent.Add(navigation);
             AddPageButton(navigation, Page.Connection, "Connection", "Start or connect the local MCP gateway.");
             toolsPageButton = AddPageButton(navigation, Page.Tools, "Tools", "Review and enable the tools advertised to MCP clients.");
+            AddPageButton(navigation, Page.AllowLists, "Allow Lists", "Create and edit the project-owned allowlist assets used by enabled tools.");
             AddPageButton(navigation, Page.Runtime, "Runtime", "Configure the optional Development Player runtime bridge.");
         }
 
@@ -293,6 +386,7 @@ namespace DucMinh.UnityMcp.Editor
             foreach (var entry in pageButtons)
                 entry.Value.EnableInClassList("unity-mcp-nav__item--active", entry.Key == page);
             if (page == Page.Tools) RebuildToolList();
+            if (page == Page.AllowLists) allowListsView?.Refresh();
         }
 
         private void BuildConnectionPage(ScrollView page)
@@ -509,6 +603,13 @@ namespace DucMinh.UnityMcp.Editor
             toolsScrollView.Add(toolsContainer);
         }
 
+        private void BuildAllowListsPage(ScrollView page)
+        {
+            page.contentContainer.AddToClassList("unity-mcp-stack");
+            allowListsView = new UnityMcpAllowListsView(() => UnityMcpEditorBootstrap.Registry);
+            page.Add(allowListsView);
+        }
+
         private void BuildRuntimePage(ScrollView page)
         {
             page.contentContainer.AddToClassList("unity-mcp-stack");
@@ -565,6 +666,7 @@ namespace DucMinh.UnityMcp.Editor
         {
             ObserveRegistry();
             RefreshGatewayStatus(UnityMcpGatewayHost.GetStatus());
+            allowListsView?.RefreshToolStatuses();
             RefreshRuntimeProfile();
         }
 
