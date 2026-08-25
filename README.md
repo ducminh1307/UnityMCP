@@ -108,8 +108,10 @@ ask the client to call `unity-status` for the open project.
 
 These actions modify only the current Unity project. Existing unrelated client
 settings are preserved, and no global or user-level MCP configuration is
-changed. Each action also installs a project-local `unity-mcp` skill so the
-client knows when to use the live Unity tools.
+changed. Each action also installs a project-local `unity-mcp` skill and an
+always-on rule (e.g. at `.agents/rules/unity-mcp.md` or `.claude/rules/unity-mcp.md`)
+so the client prioritizes live UnityMCP tools for Unity tasks and falls back to
+alternative approaches only if MCP returns an error or is unavailable.
 
 > [!IMPORTANT]
 > The generated client configuration contains a local bearer token. UnityMCP

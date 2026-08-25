@@ -645,22 +645,36 @@ namespace DucMinh.UnityMcp.Editor
                 out configPath,
                 out error)) return false;
 
-            if (UnityMcpProjectSkill.TryWrite(
+            if (!UnityMcpProjectSkill.TryWrite(
                 GetProjectRootPath(),
                 UnityMcpSkillClient.AgentSkills,
                 out _,
-                out var skillError)) return true;
-            error = "The Codex MCP config was updated, but its project skill was not: " + skillError;
-            return false;
+                out var skillError))
+            {
+                error = "The Codex MCP config was updated, but its project skill was not: " + skillError;
+                return false;
+            }
+
+            if (!UnityMcpProjectRule.TryWrite(
+                GetProjectRootPath(),
+                UnityMcpRuleClient.AgentRules,
+                out _,
+                out var ruleError))
+            {
+                error = "The Codex MCP config and skill were updated, but its project rule was not: " + ruleError;
+                return false;
+            }
+
+            return true;
         }
 
-        /// <summary>Writes this gateway and skill to this project's Antigravity workspace.</summary>
+        /// <summary>Writes this gateway, skill, and rule to this project's Antigravity workspace.</summary>
         public static bool TryConfigureAntigravityForProject(out string configPath, out string error)
         {
             return TryConfigureJsonClientForProject(UnityMcpJsonClient.Antigravity, out configPath, out error);
         }
 
-        /// <summary>Writes this gateway and skill to this project's Claude Code configuration.</summary>
+        /// <summary>Writes this gateway, skill, and rule to this project's Claude Code configuration.</summary>
         public static bool TryConfigureClaudeForProject(out string configPath, out string error)
         {
             return TryConfigureJsonClientForProject(UnityMcpJsonClient.Claude, out configPath, out error);
@@ -693,9 +707,22 @@ namespace DucMinh.UnityMcp.Editor
             var skillClient = client == UnityMcpJsonClient.Claude
                 ? UnityMcpSkillClient.Claude
                 : UnityMcpSkillClient.AgentSkills;
-            if (UnityMcpProjectSkill.TryWrite(GetProjectRootPath(), skillClient, out _, out var skillError)) return true;
-            error = "The MCP config was updated, but its project skill was not: " + skillError;
-            return false;
+            if (!UnityMcpProjectSkill.TryWrite(GetProjectRootPath(), skillClient, out _, out var skillError))
+            {
+                error = "The MCP config was updated, but its project skill was not: " + skillError;
+                return false;
+            }
+
+            var ruleClient = client == UnityMcpJsonClient.Claude
+                ? UnityMcpRuleClient.Claude
+                : UnityMcpRuleClient.AgentRules;
+            if (!UnityMcpProjectRule.TryWrite(GetProjectRootPath(), ruleClient, out _, out var ruleError))
+            {
+                error = "The MCP config and skill were updated, but its project rule was not: " + ruleError;
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>Creates a new local bearer token. Stop the running gateway first.</summary>

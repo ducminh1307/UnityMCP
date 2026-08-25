@@ -17,6 +17,6 @@ Use the UnityMCP server configured for this project without requiring the user t
 4. For changes, inspect the target state first, use dry-run behavior when the tool supports it, execute the smallest relevant operation, and verify the result through UnityMCP.
 5. For source-code edits, use normal repository tools as needed, then use UnityMCP to check compilation, console state, tests, assets, or scene effects when relevant.
 6. Use only tools currently advertised by the server. Never fabricate a result, silently substitute another open Unity project, enable disabled tools, or alter the local UnityMCP enablement profile.
-7. If the gateway or required tool is unavailable, state that clearly and use the safest project-file fallback that can still answer the request.
+7. Only if the gateway, required tool, or MCP tool call returns an error or is unavailable, state that clearly to the user and switch to the safest project-file fallback that can still answer the request.
 
 Keep potentially destructive or unsafe operations explicit and scoped. Follow each tool's confirmation, `apply`, dry-run, and safety contract.

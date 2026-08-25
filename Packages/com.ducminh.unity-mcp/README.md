@@ -46,9 +46,11 @@ Open **Window > UnityMCP > Tools** and use the **Editor-managed HTTP gateway** p
    settings are preserved and the UnityMCP entry stays synchronized when the actual port
    or token changes. The same action installs a managed `unity-mcp` skill at
    `.agents/skills/unity-mcp/SKILL.md` for Codex/Antigravity or
-   `.claude/skills/unity-mcp/SKILL.md` for Claude Code. Its trigger directs the client to
-   use live UnityMCP tools proactively for Unity tasks without requiring “use MCP” in the
-   prompt. Restart/reload the client after the first configuration; Claude Code also asks
+   `.claude/skills/unity-mcp/SKILL.md` for Claude Code, along with a managed rule at
+   `.agents/rules/unity-mcp.md` or `.claude/rules/unity-mcp.md`. Their triggers direct the
+   client to always prioritize live UnityMCP tools proactively for Unity tasks and fall back
+   to alternative methods only when MCP calls return an error or are unavailable.
+   Restart/reload the client after the first configuration; Claude Code also asks
    you to approve a project-scoped MCP server.
 6. Use **Copy MCP config** only for manual setup. The clipboard
    contains the Streamable HTTP URL and bearer token. Treat that copied value as a
@@ -59,9 +61,9 @@ static `Authorization` headers contain the local bearer token, UnityMCP adds the
 selected path to the repository's local `.git/info/exclude` when the project is inside
 Git. This does not modify the shared `.gitignore`. Do not force-add these files. UnityMCP
 refuses to inject a bearer token into a selected config file that is already tracked.
-The generated skill contains no token and is not added to Git exclude. UnityMCP only
-updates a skill bearing its managed marker and refuses to replace a user-authored
-`unity-mcp` skill at the same project path.
+The generated skill and rule files contain no token and are not added to Git exclude.
+UnityMCP only updates a skill or rule bearing its managed marker and refuses to replace
+a user-authored skill or rule at the same project path.
 
 The gateway launches only for this exact Editor descriptor and passes an explicit
 `--instance` value; it never silently selects another open Unity project. It binds only

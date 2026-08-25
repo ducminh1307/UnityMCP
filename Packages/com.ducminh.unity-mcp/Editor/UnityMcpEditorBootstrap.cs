@@ -1040,7 +1040,7 @@ namespace DucMinh.UnityMcp.Editor
                 SetGatewayFeedback(error, true);
                 return;
             }
-            SetGatewayFeedback("Codex config and project skill updated at .codex/config.toml and .agents/skills/unity-mcp. UnityMCP will keep them synchronized; restart Codex if the skill is not detected automatically.", false);
+            SetGatewayFeedback("Codex config, skill, and rule updated at .codex/config.toml, .agents/skills/unity-mcp, and .agents/rules/unity-mcp.md. UnityMCP will keep them synchronized; restart Codex if the skill or rule is not detected automatically.", false);
             ShowNotification(new GUIContent("Codex configured for this project."));
         }
 
@@ -1051,7 +1051,7 @@ namespace DucMinh.UnityMcp.Editor
                 SetGatewayFeedback(error, true);
                 return;
             }
-            SetGatewayFeedback("Antigravity config and project skill updated at .agents/mcp_config.json and .agents/skills/unity-mcp. UnityMCP will keep them synchronized; reload MCP servers or restart Antigravity to apply them.", false);
+            SetGatewayFeedback("Antigravity config, skill, and rule updated at .agents/mcp_config.json, .agents/skills/unity-mcp, and .agents/rules/unity-mcp.md. UnityMCP will keep them synchronized; reload MCP servers or restart Antigravity to apply them.", false);
             ShowNotification(new GUIContent("Antigravity configured for this project."));
         }
 
@@ -1062,7 +1062,7 @@ namespace DucMinh.UnityMcp.Editor
                 SetGatewayFeedback(error, true);
                 return;
             }
-            SetGatewayFeedback("Claude Code config and project skill updated at .mcp.json and .claude/skills/unity-mcp. UnityMCP will keep them synchronized; restart Claude Code if needed and approve the project MCP server when prompted.", false);
+            SetGatewayFeedback("Claude Code config, skill, and rule updated at .mcp.json, .claude/skills/unity-mcp, and .claude/rules/unity-mcp.md. UnityMCP will keep them synchronized; restart Claude Code if needed and approve the project MCP server when prompted.", false);
             ShowNotification(new GUIContent("Claude configured for this project."));
         }
 

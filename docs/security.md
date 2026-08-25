@@ -43,11 +43,11 @@ containing the `Authorization: Bearer <token>` header on the clipboard. Never fo
 the generated files, and remove the header before sharing client configuration or
 diagnostics.
 
-Client setup also writes an instruction-only project skill to
-`.agents/skills/unity-mcp/SKILL.md` for Codex and Antigravity or
-`.claude/skills/unity-mcp/SKILL.md` for Claude Code. These skill files contain no endpoint
-or bearer token and no global skill location is touched. A managed marker permits safe
-refreshes; an existing unmarked skill at the same path is never overwritten.
+Client setup also writes instruction-only project skills and rules to
+`.agents/skills/unity-mcp/SKILL.md` and `.agents/rules/unity-mcp.md` for Codex and Antigravity or
+`.claude/skills/unity-mcp/SKILL.md` and `.claude/rules/unity-mcp.md` for Claude Code. These skill and rule
+files contain no endpoint or bearer token and no global skill/rule location is touched. A managed marker permits
+safe refreshes; an existing unmarked skill or rule at the same path is never overwritten.
 
 The gateway can be stopped and its token regenerated only while stopped. Rotation
 invalidates every copied client configuration that used the old value. After the gateway

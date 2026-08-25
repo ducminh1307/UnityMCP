@@ -50,13 +50,13 @@ The managed client paths are `.codex/config.toml`, `.agents/mcp_config.json`, an
 local per user/project rather than a Unity asset. The panel renders process state
 (`Stopped`, `Starting`, `Running`, or `Error`) without rendering the secret itself.
 
-Each client configuration action also installs a project-only Agent Skill. Codex and
-Antigravity share `.agents/skills/unity-mcp`; Claude Code uses
-`.claude/skills/unity-mcp`. The skill metadata is deliberately broad enough to trigger
-for live Unity state, implementation, debugging, and verification tasks, while the body
-instructs the agent to query narrow UnityMCP tools before guessing from files. Skills are
-token-free and may be versioned independently of the locally excluded authenticated MCP
-configuration.
+Each client configuration action also installs a project-only Agent Skill and Rule. Codex and
+Antigravity share `.agents/skills/unity-mcp` and `.agents/rules/unity-mcp.md`; Claude Code uses
+`.claude/skills/unity-mcp` and `.claude/rules/unity-mcp.md`. The skill and rule metadata are deliberately
+broad enough to trigger for live Unity state, implementation, debugging, and verification tasks,
+directing the agent to always prioritize UnityMCP tools and only fall back to project files when an MCP tool
+returns an error or is unavailable. Skills and rules are token-free and may be versioned independently of the
+locally excluded authenticated MCP configuration.
 
 Starting a gateway creates one child Python process with `--transport
 streamable-http`, the current Editor's explicit `--instance`, and `--parent-pid` set to
