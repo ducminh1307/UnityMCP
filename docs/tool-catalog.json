@@ -1,8 +1,8 @@
 {
   "catalogVersion": "1.0.0",
   "schemaRevision": 1,
-  "expectedToolCount": 187,
-  "implementedTargetCount": 185,
+  "expectedToolCount": 192,
+  "implementedTargetCount": 190,
   "statusSemantics": {
     "implemented": "A compiled Unity handler exists. It is advertised only when the target scope, optional package requirements, and the local per-user enablement policy all permit it.",
     "planned": "The contract has no supported Unity handler in this release and must never be advertised by MCP."
@@ -17,7 +17,7 @@
     {"id":"console-tests","title":"Console & Tests","declaredCount":7},
     {"id":"packages-build","title":"Packages & Build","declaredCount":10},
     {"id":"material-shader-texture","title":"Material, Shader & Texture","declaredCount":10},
-    {"id":"camera-rendering-vfx","title":"Camera, Rendering & VFX","declaredCount":12},
+    {"id":"camera-rendering-vfx","title":"Camera, Rendering & VFX","declaredCount":17},
     {"id":"ui","title":"UI","declaredCount":8},
     {"id":"animation-timeline","title":"Animation & Timeline","declaredCount":8},
     {"id":"physics-navigation","title":"Physics & Navigation","declaredCount":8},
@@ -148,7 +148,12 @@
     {"name":"lighting-settings-get","category":"camera-rendering-vfx","status":"implemented","scope":["editor"],"safety":"safe-read","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Read scene lighting and bake settings."},
     {"name":"lighting-settings-set","category":"camera-rendering-vfx","status":"implemented","scope":["editor"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Dry-run or update supported scene lighting settings."},
     {"name":"lighting-bake","category":"camera-rendering-vfx","status":"implemented","scope":["editor"],"safety":"unsafe","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Start or cancel an asynchronous lighting bake."},
-    {"name":"particle-set","category":"camera-rendering-vfx","status":"implemented","scope":["editor","runtime"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-core","summary":"Update supported ParticleSystem modules from typed input."},
+    {"name":"particle-create","category":"camera-rendering-vfx","status":"implemented","scope":["editor","runtime"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-core","summary":"Create a Shuriken ParticleSystem GameObject with basic main-module settings."},
+    {"name":"particle-get","category":"camera-rendering-vfx","status":"implemented","scope":["editor","runtime"],"safety":"safe-read","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-core","summary":"Read supported Shuriken ParticleSystem module settings."},
+    {"name":"particle-configure","category":"camera-rendering-vfx","status":"implemented","scope":["editor","runtime"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-core","summary":"Configure typed Shuriken main, emission, shape, lifetime, noise, trails, collision, and renderer settings."},
+    {"name":"particle-preview","category":"camera-rendering-vfx","status":"implemented","scope":["editor","runtime"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-core","summary":"Play, stop, clear, or deterministically simulate a Shuriken ParticleSystem."},
+    {"name":"particle-prefab-save","category":"camera-rendering-vfx","status":"implemented","scope":["editor"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Save a scene ParticleSystem GameObject as a prefab asset."},
+    {"name":"particle-set","category":"camera-rendering-vfx","status":"implemented","scope":["editor","runtime"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-core","summary":"Backward-compatible basic ParticleSystem main-module update."},
     {"name":"vfxgraph-set","category":"camera-rendering-vfx","status":"implemented","scope":["editor"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"com.unity.visualeffectgraph","summary":"Update exposed parameters on a Visual Effect Graph component."},
 
     {"name":"ui-canvas-create","category":"ui","status":"implemented","scope":["editor"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"com.unity.ugui","summary":"Create a Canvas with validated render and scaling settings."},

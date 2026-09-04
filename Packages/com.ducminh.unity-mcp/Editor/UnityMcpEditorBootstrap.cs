@@ -1051,7 +1051,7 @@ namespace DucMinh.UnityMcp.Editor
                 SetGatewayFeedback(error, true);
                 return;
             }
-            SetGatewayFeedback("Antigravity config, skill, and rule updated at .agents/mcp_config.json, .agents/skills/unity-mcp, and .agents/rules/unity-mcp.md. UnityMCP will keep them synchronized; reload MCP servers or restart Antigravity to apply them.", false);
+            SetGatewayFeedback("Antigravity config, skill, persistent context, and rule updated at .agents/mcp_config.json, .agents/skills/unity-mcp, AGENTS.md, and .agents/rules/unity-mcp.md. UnityMCP will keep them synchronized; reload MCP servers or restart Antigravity to apply them.", false);
             ShowNotification(new GUIContent("Antigravity configured for this project."));
         }
 

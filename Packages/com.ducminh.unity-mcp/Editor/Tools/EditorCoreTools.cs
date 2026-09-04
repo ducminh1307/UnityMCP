@@ -37,6 +37,7 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class AssetDeleteInput { public string path; public bool apply; }
     [Serializable] public sealed class PrefabInfoOutput { public string path; public string assetType; public string instanceStatus; public string rootName; public int componentCount; }
     [Serializable] public sealed class PrefabInstantiateInput { public string path; public string scene; public int? parentInstanceId; public string parentPath; public Vector3? position; public bool apply; }
+    [Serializable] public sealed class ParticlePrefabSaveInput { public int? instanceId; public string path; public int componentIndex; public string assetPath; public bool overwrite; public bool apply; }
     [Serializable] public sealed class MaterialInfoOutput { public string path; public string name; public string shader; public int renderQueue; public List<string> keywords = new List<string>(); public List<MaterialPropertyInfo> properties = new List<MaterialPropertyInfo>(); }
     [Serializable] public sealed class MaterialPropertyInfo { public string name; public string description; public string type; }
     [Serializable] public sealed class MaterialSetPropertyInput { public string path; public string property; public string valueJson; public bool apply; }
@@ -226,6 +227,22 @@ namespace DucMinh.UnityMcp.Editor
             if (parent != null) Undo.SetTransformParent(created.transform, parent.transform, "UnityMCP Set Prefab Parent");
             if (input.position.HasValue) created.transform.position = input.position.Value;
             return Change(context, $"Instantiated prefab '{input.path}'.", created.GetInstanceID());
+        }
+
+        [UnityMcpTool("particle-prefab-save", Description = "Save a scene ParticleSystem GameObject as a prefab asset; dry-run unless apply is true.", Category = "vfx", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
+        public static ChangeOutput ParticlePrefabSave(ParticlePrefabSaveInput input, UnityMcpContext context)
+        {
+            ValidateAssetPath(input.assetPath, ".prefab");
+            var target = FindGameObject(input.instanceId, input.path);
+            var systems = target.GetComponents<ParticleSystem>();
+            if (input.componentIndex < 0 || input.componentIndex >= systems.Length) throw new ArgumentOutOfRangeException(nameof(input.componentIndex));
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(input.assetPath) != null && !input.overwrite)
+                throw new InvalidOperationException("A prefab already exists at assetPath. Set overwrite to true to replace it.");
+            if (context.DryRun) return Change(context, $"Save ParticleSystem '{target.name}' as prefab '{input.assetPath}'.", systems[input.componentIndex].GetInstanceID());
+            var prefab = PrefabUtility.SaveAsPrefabAssetAndConnect(target, input.assetPath, InteractionMode.AutomatedAction);
+            if (prefab == null) throw new InvalidOperationException("Unity could not save the ParticleSystem prefab.");
+            AssetDatabase.SaveAssets();
+            return Change(context, $"Saved ParticleSystem prefab '{input.assetPath}'.", prefab.GetInstanceID());
         }
 
         [UnityMcpTool("material-info", Description = "Read material and shader properties.", Category = "material", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead, DefaultEnabled = true)]

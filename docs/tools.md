@@ -15,8 +15,8 @@ duplicating schemas that Unity generates at runtime.
 
 ## At a glance
 
-- **187** cataloged tools in **20** categories.
-- **185** implemented tools and **2** planned tools.
+- **192** cataloged tools in **20** categories.
+- **190** implemented tools and **2** planned tools.
 - **20** safe-read tools enabled in a fresh project.
 - Catalog version: 1.0.0.
 
@@ -64,7 +64,7 @@ appear in this built-in catalog; use `custom-tool-list` to inspect them.
 - [Console & Tests](#console-tests) (7)
 - [Packages & Build](#packages-build) (10)
 - [Material, Shader & Texture](#material-shader-texture) (10)
-- [Camera, Rendering & VFX](#camera-rendering-vfx) (12)
+- [Camera, Rendering & VFX](#camera-rendering-vfx) (17)
 - [UI](#ui) (8)
 - [Animation & Timeline](#animation-timeline) (8)
 - [Physics & Navigation](#physics-navigation) (8)
@@ -260,7 +260,7 @@ appear in this built-in catalog; use `custom-tool-list` to inspect them.
 
 ## Camera, Rendering & VFX
 
-12 tools.
+17 tools.
 
 | Tool | Status | Scope | Safety | Default | Dependency | Description |
 |---|---|---|---|---|---|---|
@@ -274,7 +274,12 @@ appear in this built-in catalog; use `custom-tool-list` to inspect them.
 | `lighting-settings-get` | implemented | editor | safe-read | No | `unity-editor` | Read scene lighting and bake settings. |
 | `lighting-settings-set` | implemented | editor | write | No | `unity-editor` | Dry-run or update supported scene lighting settings. |
 | `lighting-bake` | implemented | editor | unsafe | No | `unity-editor` | Start or cancel an asynchronous lighting bake. |
-| `particle-set` | implemented | editor, runtime | write | No | `unity-core` | Update supported ParticleSystem modules from typed input. |
+| `particle-create` | implemented | editor, runtime | write | No | `unity-core` | Create a Shuriken ParticleSystem GameObject with basic main-module settings. |
+| `particle-get` | implemented | editor, runtime | safe-read | No | `unity-core` | Read supported Shuriken ParticleSystem module settings. |
+| `particle-configure` | implemented | editor, runtime | write | No | `unity-core` | Configure typed Shuriken main, emission, shape, lifetime, noise, trails, collision, and renderer settings. |
+| `particle-preview` | implemented | editor, runtime | write | No | `unity-core` | Play, stop, clear, or deterministically simulate a Shuriken ParticleSystem. |
+| `particle-prefab-save` | implemented | editor | write | No | `unity-editor` | Save a scene ParticleSystem GameObject as a prefab asset. |
+| `particle-set` | implemented | editor, runtime | write | No | `unity-core` | Backward-compatible basic ParticleSystem main-module update. |
 | `vfxgraph-set` | implemented | editor | write | No | `com.unity.visualeffectgraph` | Update exposed parameters on a Visual Effect Graph component. |
 
 <a id="ui"></a>

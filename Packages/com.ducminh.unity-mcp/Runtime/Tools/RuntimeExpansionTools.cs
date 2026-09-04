@@ -60,6 +60,10 @@ namespace DucMinh.UnityMcp
     [Serializable] public sealed class CameraSetInput { public int? instanceId; public string path; public bool? enabled; public bool? orthographic; public float? fieldOfView; public float? orthographicSize; public float? nearClipPlane; public float? farClipPlane; public int? cullingMask; public Color? backgroundColor; public Rect? rect; public bool apply; }
 
     [Serializable] public sealed class ParticleSetInput { public int? instanceId; public string path; public int componentIndex; public float? startLifetime; public float? startSpeed; public float? startSize; public Color? startColor; public bool? looping; public bool? play; public bool apply; }
+    [Serializable] public sealed class ParticleCreateInput { public string name; public int? parentInstanceId; public string parentPath; public Vector3? localPosition; public Vector3? localEulerAngles; public Vector3? localScale; public float? duration; public float? startLifetime; public float? startSpeed; public float? startSize; public Color? startColor; public bool? looping; public int? maxParticles; public bool playOnAwake = true; public bool apply; }
+    [Serializable] public sealed class ParticleConfigureInput { public int? instanceId; public string path; public int componentIndex; public float? duration; public float? startDelay; public float? startLifetime; public float? startSpeed; public float? startSize; public Color? startColor; public bool? looping; public bool? prewarm; public int? maxParticles; public bool? emissionEnabled; public float? rateOverTime; public bool? shapeEnabled; public string shapeType; public float? shapeRadius; public float? shapeAngle; public bool? velocityOverLifetimeEnabled; public Vector3? velocityOverLifetime; public bool? colorOverLifetimeEnabled; public Color? colorOverLifetimeColor; public bool? sizeOverLifetimeEnabled; public float? sizeOverLifetimeMultiplier; public bool? noiseEnabled; public float? noiseStrength; public float? noiseFrequency; public float? noiseScrollSpeed; public bool? trailsEnabled; public float? trailsRatio; public float? trailsLifetime; public bool? collisionEnabled; public string collisionType; public float? collisionDampen; public string renderMode; public int? sortingOrder; public bool apply; }
+    [Serializable] public sealed class ParticlePreviewInput { public int? instanceId; public string path; public int componentIndex; public string action; public float simulateTime; public bool withChildren = true; public bool apply; }
+    [Serializable] public sealed class ParticleInfoOutput { public int instanceId; public string path; public bool isPlaying; public float duration; public float startLifetime; public float startSpeed; public float startSize; public Color startColor; public bool looping; public int maxParticles; public bool emissionEnabled; public float rateOverTime; public bool shapeEnabled; public string shapeType; public float shapeRadius; public bool velocityOverLifetimeEnabled; public bool colorOverLifetimeEnabled; public bool sizeOverLifetimeEnabled; public bool noiseEnabled; public bool trailsEnabled; public bool collisionEnabled; public string renderMode; public int sortingOrder; }
     [Serializable] public sealed class RuntimeQuitInput { public bool apply; }
 
     /// <summary>Additional engine-only tools. They contain no editor-only or optional package APIs.</summary>
@@ -311,6 +315,97 @@ namespace DucMinh.UnityMcp
             }
             return RuntimeCoreTools.Change(context, "Updated ParticleSystem on '" + RuntimeCoreTools.HierarchyPath(target) + "'.", system.GetInstanceID());
         }
+
+        [UnityMcpTool("particle-create", Description = "Create and configure a Shuriken ParticleSystem GameObject; dry-run unless apply is true.", Category = "vfx", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
+        public static ChangeOutput ParticleCreate(ParticleCreateInput input, UnityMcpContext context)
+        {
+            if (string.IsNullOrWhiteSpace(input.name)) throw new ArgumentException("name is required.");
+            var parent = input.parentInstanceId.HasValue || !string.IsNullOrEmpty(input.parentPath) ? RuntimeCoreTools.RequireGameObject(input.parentInstanceId, input.parentPath) : null;
+            if (input.maxParticles.HasValue && input.maxParticles.Value < 1) throw new ArgumentOutOfRangeException(nameof(input.maxParticles));
+            if (context.DryRun) return RuntimeCoreTools.Change(context, "Create ParticleSystem '" + input.name + "'.");
+
+            var target = new GameObject(input.name);
+            UnityMcpUndo.RegisterCreated(target, "UnityMCP Create ParticleSystem");
+            if (parent != null) target.transform.SetParent(parent.transform, false);
+            if (input.localPosition.HasValue) target.transform.localPosition = input.localPosition.Value;
+            if (input.localEulerAngles.HasValue) target.transform.localEulerAngles = input.localEulerAngles.Value;
+            if (input.localScale.HasValue) target.transform.localScale = input.localScale.Value;
+            var system = target.AddComponent<ParticleSystem>();
+            var main = system.main;
+            if (input.duration.HasValue) main.duration = RequireNonNegative(input.duration.Value, nameof(input.duration));
+            if (input.startLifetime.HasValue) main.startLifetime = RequireNonNegative(input.startLifetime.Value, nameof(input.startLifetime));
+            if (input.startSpeed.HasValue) main.startSpeed = input.startSpeed.Value;
+            if (input.startSize.HasValue) main.startSize = RequireNonNegative(input.startSize.Value, nameof(input.startSize));
+            if (input.startColor.HasValue) main.startColor = input.startColor.Value;
+            if (input.looping.HasValue) main.loop = input.looping.Value;
+            if (input.maxParticles.HasValue) main.maxParticles = input.maxParticles.Value;
+            main.playOnAwake = input.playOnAwake;
+            return RuntimeCoreTools.Change(context, "Created ParticleSystem '" + RuntimeCoreTools.HierarchyPath(target) + "'.", system.GetInstanceID());
+        }
+
+        [UnityMcpTool("particle-get", Description = "Read supported Shuriken ParticleSystem module settings.", Category = "vfx", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.SafeRead)]
+        public static ParticleInfoOutput ParticleGet(ParticleSetInput input)
+        {
+            var system = RequireParticleSystem(input.instanceId, input.path, input.componentIndex);
+            var main = system.main; var emission = system.emission; var shape = system.shape; var velocity = system.velocityOverLifetime;
+            var color = system.colorOverLifetime; var size = system.sizeOverLifetime; var noise = system.noise; var trails = system.trails; var collision = system.collision;
+            var renderer = system.GetComponent<ParticleSystemRenderer>();
+            return new ParticleInfoOutput { instanceId = system.GetInstanceID(), path = RuntimeCoreTools.HierarchyPath(system.gameObject), isPlaying = system.isPlaying, duration = main.duration, startLifetime = main.startLifetime.constant, startSpeed = main.startSpeed.constant, startSize = main.startSize.constant, startColor = main.startColor.color, looping = main.loop, maxParticles = main.maxParticles, emissionEnabled = emission.enabled, rateOverTime = emission.rateOverTime.constant, shapeEnabled = shape.enabled, shapeType = shape.shapeType.ToString(), shapeRadius = shape.radius, velocityOverLifetimeEnabled = velocity.enabled, colorOverLifetimeEnabled = color.enabled, sizeOverLifetimeEnabled = size.enabled, noiseEnabled = noise.enabled, trailsEnabled = trails.enabled, collisionEnabled = collision.enabled, renderMode = renderer.renderMode.ToString(), sortingOrder = renderer.sortingOrder };
+        }
+
+        [UnityMcpTool("particle-configure", Description = "Configure typed Shuriken main, emission, shape, velocity, color/size-over-lifetime, noise, trails, collision, and renderer settings; dry-run unless apply is true.", Category = "vfx", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
+        public static ChangeOutput ParticleConfigure(ParticleConfigureInput input, UnityMcpContext context)
+        {
+            var system = RequireParticleSystem(input.instanceId, input.path, input.componentIndex);
+            if (!context.DryRun)
+            {
+                UnityMcpUndo.Record(system, "UnityMCP Configure ParticleSystem");
+                var main = system.main;
+                if (input.duration.HasValue) main.duration = RequireNonNegative(input.duration.Value, nameof(input.duration));
+                if (input.startDelay.HasValue) main.startDelay = RequireNonNegative(input.startDelay.Value, nameof(input.startDelay));
+                if (input.startLifetime.HasValue) main.startLifetime = RequireNonNegative(input.startLifetime.Value, nameof(input.startLifetime));
+                if (input.startSpeed.HasValue) main.startSpeed = input.startSpeed.Value;
+                if (input.startSize.HasValue) main.startSize = RequireNonNegative(input.startSize.Value, nameof(input.startSize));
+                if (input.startColor.HasValue) main.startColor = input.startColor.Value;
+                if (input.looping.HasValue) main.loop = input.looping.Value;
+                if (input.prewarm.HasValue) main.prewarm = input.prewarm.Value;
+                if (input.maxParticles.HasValue) main.maxParticles = RequirePositive(input.maxParticles.Value, nameof(input.maxParticles));
+                var emission = system.emission; if (input.emissionEnabled.HasValue) emission.enabled = input.emissionEnabled.Value; if (input.rateOverTime.HasValue) emission.rateOverTime = RequireNonNegative(input.rateOverTime.Value, nameof(input.rateOverTime));
+                var shape = system.shape; if (input.shapeEnabled.HasValue) shape.enabled = input.shapeEnabled.Value; if (input.shapeType != null) shape.shapeType = ParseEnum<ParticleSystemShapeType>(input.shapeType, nameof(input.shapeType)); if (input.shapeRadius.HasValue) shape.radius = RequireNonNegative(input.shapeRadius.Value, nameof(input.shapeRadius)); if (input.shapeAngle.HasValue) shape.angle = RequireRange(input.shapeAngle.Value, 0f, 360f, nameof(input.shapeAngle));
+                var velocity = system.velocityOverLifetime; if (input.velocityOverLifetimeEnabled.HasValue) velocity.enabled = input.velocityOverLifetimeEnabled.Value; if (input.velocityOverLifetime.HasValue) { var value = input.velocityOverLifetime.Value; velocity.x = value.x; velocity.y = value.y; velocity.z = value.z; }
+                var color = system.colorOverLifetime; if (input.colorOverLifetimeEnabled.HasValue) color.enabled = input.colorOverLifetimeEnabled.Value; if (input.colorOverLifetimeColor.HasValue) color.color = input.colorOverLifetimeColor.Value;
+                var size = system.sizeOverLifetime; if (input.sizeOverLifetimeEnabled.HasValue) size.enabled = input.sizeOverLifetimeEnabled.Value; if (input.sizeOverLifetimeMultiplier.HasValue) size.size = RequireNonNegative(input.sizeOverLifetimeMultiplier.Value, nameof(input.sizeOverLifetimeMultiplier));
+                var noise = system.noise; if (input.noiseEnabled.HasValue) noise.enabled = input.noiseEnabled.Value; if (input.noiseStrength.HasValue) noise.strength = RequireNonNegative(input.noiseStrength.Value, nameof(input.noiseStrength)); if (input.noiseFrequency.HasValue) noise.frequency = RequireNonNegative(input.noiseFrequency.Value, nameof(input.noiseFrequency)); if (input.noiseScrollSpeed.HasValue) noise.scrollSpeed = input.noiseScrollSpeed.Value;
+                var trails = system.trails; if (input.trailsEnabled.HasValue) trails.enabled = input.trailsEnabled.Value; if (input.trailsRatio.HasValue) trails.ratio = RequireRange(input.trailsRatio.Value, 0f, 1f, nameof(input.trailsRatio)); if (input.trailsLifetime.HasValue) trails.lifetime = RequireNonNegative(input.trailsLifetime.Value, nameof(input.trailsLifetime));
+                var collision = system.collision; if (input.collisionEnabled.HasValue) collision.enabled = input.collisionEnabled.Value; if (input.collisionType != null) collision.type = ParseEnum<ParticleSystemCollisionType>(input.collisionType, nameof(input.collisionType)); if (input.collisionDampen.HasValue) collision.dampenMultiplier = RequireRange(input.collisionDampen.Value, 0f, 1f, nameof(input.collisionDampen));
+                var renderer = system.GetComponent<ParticleSystemRenderer>(); if (input.renderMode != null) renderer.renderMode = ParseEnum<ParticleSystemRenderMode>(input.renderMode, nameof(input.renderMode)); if (input.sortingOrder.HasValue) renderer.sortingOrder = input.sortingOrder.Value;
+            }
+            return RuntimeCoreTools.Change(context, "Configured ParticleSystem on '" + RuntimeCoreTools.HierarchyPath(system.gameObject) + "'.", system.GetInstanceID());
+        }
+
+        [UnityMcpTool("particle-preview", Description = "Play, stop, clear, or deterministically simulate a Shuriken ParticleSystem; dry-run unless apply is true.", Category = "vfx", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
+        public static ChangeOutput ParticlePreview(ParticlePreviewInput input, UnityMcpContext context)
+        {
+            var system = RequireParticleSystem(input.instanceId, input.path, input.componentIndex);
+            var action = (input.action ?? "play").Trim().ToLowerInvariant();
+            if (action != "play" && action != "stop" && action != "clear" && action != "simulate") throw new ArgumentException("action must be play, stop, clear, or simulate.");
+            if (action == "simulate" && input.simulateTime < 0f) throw new ArgumentOutOfRangeException(nameof(input.simulateTime));
+            if (!context.DryRun) { if (action == "play") system.Play(input.withChildren); else if (action == "stop") system.Stop(input.withChildren, ParticleSystemStopBehavior.StopEmittingAndClear); else if (action == "clear") system.Clear(input.withChildren); else system.Simulate(input.simulateTime, input.withChildren, true, true); }
+            return RuntimeCoreTools.Change(context, "ParticleSystem " + action + " on '" + RuntimeCoreTools.HierarchyPath(system.gameObject) + "'.", system.GetInstanceID());
+        }
+
+        private static ParticleSystem RequireParticleSystem(int? instanceId, string path, int componentIndex)
+        {
+            var target = RuntimeCoreTools.RequireGameObject(instanceId, path);
+            var systems = target.GetComponents<ParticleSystem>();
+            if (componentIndex < 0 || componentIndex >= systems.Length) throw new ArgumentOutOfRangeException(nameof(componentIndex));
+            return systems[componentIndex];
+        }
+
+        private static float RequireNonNegative(float value, string name) { if (value < 0f) throw new ArgumentOutOfRangeException(name); return value; }
+        private static int RequirePositive(int value, string name) { if (value < 1) throw new ArgumentOutOfRangeException(name); return value; }
+        private static float RequireRange(float value, float minimum, float maximum, string name) { if (value < minimum || value > maximum) throw new ArgumentOutOfRangeException(name); return value; }
+        private static T ParseEnum<T>(string value, string name) where T : struct { if (!Enum.TryParse(value, true, out T result) || !Enum.IsDefined(typeof(T), result)) throw new ArgumentException(name + " is not a supported " + typeof(T).Name + " value."); return result; }
 
         [UnityMcpTool("runtime-quit", Description = "Quit a desktop Development Player; dry-run unless apply is true.", Category = "runtime", Scope = UnityMcpScope.Runtime, Safety = UnityMcpSafety.Destructive, SupportsDryRun = true)]
         public static ChangeOutput RuntimeQuit(RuntimeQuitInput input, UnityMcpContext context)

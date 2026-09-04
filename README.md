@@ -112,6 +112,8 @@ changed. Each action also installs a project-local `unity-mcp` skill and an
 always-on rule (e.g. at `.agents/rules/unity-mcp.md` or `.claude/rules/unity-mcp.md`)
 so the client prioritizes live UnityMCP tools for Unity tasks and falls back to
 alternative approaches only if MCP returns an error or is unavailable.
+For Antigravity, UnityMCP also upserts a managed block into root `AGENTS.md`,
+its persistent workspace context file, while preserving any existing instructions.
 
 > [!IMPORTANT]
 > The generated client configuration contains a local bearer token. UnityMCP

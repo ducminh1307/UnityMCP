@@ -51,7 +51,9 @@ local per user/project rather than a Unity asset. The panel renders process stat
 (`Stopped`, `Starting`, `Running`, or `Error`) without rendering the secret itself.
 
 Each client configuration action also installs a project-only Agent Skill and Rule. Codex and
-Antigravity share `.agents/skills/unity-mcp` and `.agents/rules/unity-mcp.md`; Claude Code uses
+Antigravity share `.agents/skills/unity-mcp` and `.agents/rules/unity-mcp.md`; Antigravity also
+gets a managed, preserved block in root `AGENTS.md`, its persistent workspace context rather than
+an on-demand skill. Claude Code uses
 `.claude/skills/unity-mcp` and `.claude/rules/unity-mcp.md`. The skill and rule metadata are deliberately
 broad enough to trigger for live Unity state, implementation, debugging, and verification tasks,
 directing the agent to always prioritize UnityMCP tools and only fall back to project files when an MCP tool

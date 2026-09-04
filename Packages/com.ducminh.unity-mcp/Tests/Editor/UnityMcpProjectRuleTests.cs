@@ -107,5 +107,36 @@ namespace DucMinh.UnityMcp.Tests
                 if (Directory.Exists(projectRoot)) Directory.Delete(projectRoot, true);
             }
         }
+
+        [Test]
+        public void TryWriteAntigravityContext_PreservesUserInstructions_AndRefreshesManagedBlock()
+        {
+            var projectRoot = Path.Combine(Path.GetTempPath(), "unity-mcp-antigravity-context-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(projectRoot);
+                var contextPath = Path.Combine(projectRoot, "AGENTS.md");
+                File.WriteAllText(contextPath, "# Project instructions\n\nKeep existing guidance.\n");
+
+                Assert.That(DucMinh.UnityMcp.Editor.UnityMcpAntigravityContext.TryWrite(
+                    projectRoot, out var writtenPath, out var error), Is.True, error);
+                Assert.That(writtenPath, Is.EqualTo(contextPath));
+                var content = File.ReadAllText(contextPath);
+                StringAssert.Contains("Keep existing guidance.", content);
+                StringAssert.Contains("UnityMCP live-Unity workflow", content);
+                StringAssert.Contains("UnityMCP Antigravity context: start", content);
+                Assert.That(DucMinh.UnityMcp.Editor.UnityMcpAntigravityContext.IsManaged(projectRoot), Is.True);
+
+                File.WriteAllText(contextPath, content.Replace("UnityMCP live-Unity workflow", "stale local edit"));
+                Assert.That(DucMinh.UnityMcp.Editor.UnityMcpAntigravityContext.TryWrite(
+                    projectRoot, out _, out error), Is.True, error);
+                StringAssert.Contains("UnityMCP live-Unity workflow", File.ReadAllText(contextPath));
+                StringAssert.DoesNotContain("stale local edit", File.ReadAllText(contextPath));
+            }
+            finally
+            {
+                if (Directory.Exists(projectRoot)) Directory.Delete(projectRoot, true);
+            }
+        }
     }
 }

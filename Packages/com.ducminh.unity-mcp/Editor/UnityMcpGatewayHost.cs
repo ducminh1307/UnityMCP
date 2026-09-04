@@ -713,6 +713,13 @@ namespace DucMinh.UnityMcp.Editor
                 return false;
             }
 
+            if (client == UnityMcpJsonClient.Antigravity
+                && !UnityMcpAntigravityContext.TryWrite(GetProjectRootPath(), out _, out var contextError))
+            {
+                error = "The Antigravity MCP config and skill were updated, but its persistent workspace context was not: " + contextError;
+                return false;
+            }
+
             var ruleClient = client == UnityMcpJsonClient.Claude
                 ? UnityMcpRuleClient.Claude
                 : UnityMcpRuleClient.AgentRules;
