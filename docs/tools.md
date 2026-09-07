@@ -15,8 +15,8 @@ duplicating schemas that Unity generates at runtime.
 
 ## At a glance
 
-- **192** cataloged tools in **20** categories.
-- **190** implemented tools and **2** planned tools.
+- **194** cataloged tools in **20** categories.
+- **192** implemented tools and **2** planned tools.
 - **20** safe-read tools enabled in a fresh project.
 - Catalog version: 1.0.0.
 
@@ -62,7 +62,7 @@ appear in this built-in catalog; use `custom-tool-list` to inspect them.
 - [Prefab & ScriptableObject](#prefab-scriptableobject) (9)
 - [Scripts & Compilation](#scripts-compilation) (10)
 - [Console & Tests](#console-tests) (7)
-- [Packages & Build](#packages-build) (10)
+- [Packages & Build](#packages-build) (12)
 - [Material, Shader & Texture](#material-shader-texture) (10)
 - [Camera, Rendering & VFX](#camera-rendering-vfx) (17)
 - [UI](#ui) (8)
@@ -222,7 +222,7 @@ appear in this built-in catalog; use `custom-tool-list` to inspect them.
 
 ## Packages & Build
 
-10 tools.
+12 tools.
 
 | Tool | Status | Scope | Safety | Default | Dependency | Description |
 |---|---|---|---|---|---|---|
@@ -236,6 +236,8 @@ appear in this built-in catalog; use `custom-tool-list` to inspect them.
 | `build-target-switch` | implemented | editor | unsafe | No | `unity-editor` | Switch the active build target as an asynchronous job. |
 | `build-player` | implemented | editor | unsafe | No | `unity-editor` | Build a player to a contained output path as a job. |
 | `build-job-get` | implemented | editor | safe-read | No | `unity-editor` | Read progress and report details for a build job. |
+| `player-settings-get` | implemented | editor | safe-read | No | `unity-editor` | Read supported non-secret Player Settings for an active or selected target group. |
+| `player-settings-set` | implemented | editor | write | No | `unity-editor` | Dry-run or update a supported non-secret subset of Player Settings. |
 
 <a id="material-shader-texture"></a>
 

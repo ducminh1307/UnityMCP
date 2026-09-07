@@ -1,8 +1,8 @@
 {
   "catalogVersion": "1.0.0",
-  "schemaRevision": 1,
-  "expectedToolCount": 192,
-  "implementedTargetCount": 190,
+  "schemaRevision": 2,
+  "expectedToolCount": 194,
+  "implementedTargetCount": 192,
   "statusSemantics": {
     "implemented": "A compiled Unity handler exists. It is advertised only when the target scope, optional package requirements, and the local per-user enablement policy all permit it.",
     "planned": "The contract has no supported Unity handler in this release and must never be advertised by MCP."
@@ -15,7 +15,7 @@
     {"id":"prefab-scriptableobject","title":"Prefab & ScriptableObject","declaredCount":9},
     {"id":"scripts-compilation","title":"Scripts & Compilation","declaredCount":10},
     {"id":"console-tests","title":"Console & Tests","declaredCount":7},
-    {"id":"packages-build","title":"Packages & Build","declaredCount":10},
+    {"id":"packages-build","title":"Packages & Build","declaredCount":12},
     {"id":"material-shader-texture","title":"Material, Shader & Texture","declaredCount":10},
     {"id":"camera-rendering-vfx","title":"Camera, Rendering & VFX","declaredCount":17},
     {"id":"ui","title":"UI","declaredCount":8},
@@ -126,6 +126,8 @@
     {"name":"build-target-switch","category":"packages-build","status":"implemented","scope":["editor"],"safety":"unsafe","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Switch the active build target as an asynchronous job."},
     {"name":"build-player","category":"packages-build","status":"implemented","scope":["editor"],"safety":"unsafe","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Build a player to a contained output path as a job."},
     {"name":"build-job-get","category":"packages-build","status":"implemented","scope":["editor"],"safety":"safe-read","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Read progress and report details for a build job."},
+    {"name":"player-settings-get","category":"packages-build","status":"implemented","scope":["editor"],"safety":"safe-read","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Read supported non-secret Player Settings for an active or selected target group."},
+    {"name":"player-settings-set","category":"packages-build","status":"implemented","scope":["editor"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Dry-run or update a supported non-secret subset of Player Settings."},
 
     {"name":"material-info","category":"material-shader-texture","status":"implemented","scope":["editor"],"safety":"safe-read","defaultEnabled":true,"schemaRevision":1,"dependency":"unity-core","summary":"Read shader, keywords, render queue, and material properties."},
     {"name":"material-create","category":"material-shader-texture","status":"implemented","scope":["editor"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Dry-run or create a material asset using a known shader."},

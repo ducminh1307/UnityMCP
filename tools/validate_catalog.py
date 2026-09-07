@@ -169,7 +169,7 @@ def validate(catalog: dict[str, Any]) -> list[str]:
 
     expected_count = catalog.get("expectedToolCount")
     implemented_count = catalog.get("implementedTargetCount")
-    require(expected_count == 192, "expectedToolCount must be 192", errors)
+    require(expected_count == 194, "expectedToolCount must be 194", errors)
     require(len(tools) == expected_count,
             f"tool count {len(tools)} does not match expectedToolCount {expected_count}", errors)
     require(sum(declared_counts.values()) == expected_count,

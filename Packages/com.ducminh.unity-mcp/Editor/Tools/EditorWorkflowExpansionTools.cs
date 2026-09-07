@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
 using UnityEditor.Compilation;
 using UnityEditor.PackageManager;
@@ -60,6 +61,9 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class BuildSettingsOutput { public string activeBuildTarget; public string selectedBuildTargetGroup; public bool development; public bool allowDebugging; public bool connectProfiler; public List<BuildSceneSetting> scenes = new List<BuildSceneSetting>(); }
     [Serializable] public sealed class BuildSettingsSetInput { public List<BuildSceneSetting> scenes; public bool? development; public bool? allowDebugging; public bool? connectProfiler; public bool apply; }
     [Serializable] public sealed class BuildSettingsChangeOutput { public bool dryRun; public bool changed; public string summary; public bool rollbackSupported; public List<ChangeJournalEntry> journal = new List<ChangeJournalEntry>(); }
+    [Serializable] public sealed class PlayerSettingsGetInput { public string targetGroup; }
+    [Serializable] public sealed class PlayerSettingsOutput { public string targetGroup; public string companyName; public string productName; public string bundleVersion; public string applicationIdentifier; public string scriptingDefineSymbols; public string scriptingBackend; }
+    [Serializable] public sealed class PlayerSettingsSetInput { public string targetGroup; public string companyName; public string productName; public string bundleVersion; public string applicationIdentifier; public string scriptingDefineSymbols; public ScriptingImplementation? scriptingBackend; public bool apply; }
     [Serializable] public sealed class BuildTargetSwitchInput { public string targetGroup; public string target; public bool apply; }
     [Serializable] public sealed class BuildPlayerInput { public string outputPath; public string targetGroup; public string target; public List<string> scenes; public bool development = true; public bool allowDebugging; public bool connectProfiler; public bool apply; }
     [Serializable] public sealed class BuildPlayerJobResult { public string outputPath; public string target; public string targetGroup; public string result; public int totalErrors; public int totalWarnings; public ulong totalSize; public double totalTimeSeconds; }
@@ -118,6 +122,39 @@ namespace DucMinh.UnityMcp.Editor
                     }
                 }
             }
+            return output;
+        }
+
+        [UnityMcpTool("player-settings-get", Description = "Read the supported non-secret Player Settings for a selected or active build target group.", Category = "packages-build", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
+        public static PlayerSettingsOutput PlayerSettingsGet(PlayerSettingsGetInput input)
+        {
+            return ReadPlayerSettings(ResolvePlayerSettingsTargetGroup(input?.targetGroup));
+        }
+
+        [UnityMcpTool("player-settings-set", Description = "Update a supported, non-secret subset of Player Settings; dry-run unless apply is true. Signing credentials and platform store secrets are never exposed or changed.", Category = "packages-build", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
+        public static BuildSettingsChangeOutput PlayerSettingsSet(PlayerSettingsSetInput input, UnityMcpContext context)
+        {
+            if (input == null) throw new ArgumentNullException(nameof(input));
+            var group = ResolvePlayerSettingsTargetGroup(input.targetGroup);
+            ValidatePlayerSettingsSet(input);
+            var before = ReadPlayerSettings(group);
+            if (!context.DryRun)
+            {
+                if (input.companyName != null) PlayerSettings.companyName = input.companyName.Trim();
+                if (input.productName != null) PlayerSettings.productName = input.productName.Trim();
+                if (input.bundleVersion != null) PlayerSettings.bundleVersion = input.bundleVersion.Trim();
+                if (input.applicationIdentifier != null) PlayerSettings.SetApplicationIdentifier(group, input.applicationIdentifier.Trim());
+                var target = NamedBuildTarget.FromBuildTargetGroup(group);
+                if (input.scriptingDefineSymbols != null) PlayerSettings.SetScriptingDefineSymbols(target, input.scriptingDefineSymbols.Trim());
+                if (input.scriptingBackend.HasValue) PlayerSettings.SetScriptingBackend(target, input.scriptingBackend.Value);
+            }
+            var output = new BuildSettingsChangeOutput { dryRun = context.DryRun, changed = !context.DryRun, summary = "Update supported Player Settings for " + group + ".", rollbackSupported = false };
+            if (input.companyName != null) output.journal.Add(new ChangeJournalEntry { operation = "set-company-name", before = before.companyName, after = input.companyName.Trim() });
+            if (input.productName != null) output.journal.Add(new ChangeJournalEntry { operation = "set-product-name", before = before.productName, after = input.productName.Trim() });
+            if (input.bundleVersion != null) output.journal.Add(new ChangeJournalEntry { operation = "set-bundle-version", before = before.bundleVersion, after = input.bundleVersion.Trim() });
+            if (input.applicationIdentifier != null) output.journal.Add(new ChangeJournalEntry { operation = "set-application-identifier", before = before.applicationIdentifier, after = input.applicationIdentifier.Trim() });
+            if (input.scriptingDefineSymbols != null) output.journal.Add(new ChangeJournalEntry { operation = "set-scripting-define-symbols", before = before.scriptingDefineSymbols, after = input.scriptingDefineSymbols.Trim() });
+            if (input.scriptingBackend.HasValue) output.journal.Add(new ChangeJournalEntry { operation = "set-scripting-backend", before = before.scriptingBackend, after = input.scriptingBackend.Value.ToString() });
             return output;
         }
 
@@ -739,6 +776,34 @@ namespace DucMinh.UnityMcp.Editor
             if (string.IsNullOrWhiteSpace(value) || !Enum.TryParse(value, true, out group) || !Enum.IsDefined(typeof(BuildTargetGroup), group) || group == BuildTargetGroup.Unknown)
                 throw new ArgumentException("targetGroup must be a named supported Unity BuildTargetGroup value.");
             return group;
+        }
+
+        public static BuildTargetGroup ResolvePlayerSettingsTargetGroup(string value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? EditorUserBuildSettings.selectedBuildTargetGroup : ParseBuildTargetGroup(value);
+        }
+
+        public static void ValidatePlayerSettingsSet(PlayerSettingsSetInput input)
+        {
+            if (input.companyName == null && input.productName == null && input.bundleVersion == null && input.applicationIdentifier == null && input.scriptingDefineSymbols == null && !input.scriptingBackend.HasValue)
+                throw new ArgumentException("Supply at least one supported Player Setting.");
+            ValidatePlayerSettingsText(input.companyName, "companyName");
+            ValidatePlayerSettingsText(input.productName, "productName");
+            ValidatePlayerSettingsText(input.bundleVersion, "bundleVersion");
+            ValidatePlayerSettingsText(input.applicationIdentifier, "applicationIdentifier");
+        }
+
+        private static PlayerSettingsOutput ReadPlayerSettings(BuildTargetGroup group)
+        {
+            var target = NamedBuildTarget.FromBuildTargetGroup(group);
+            return new PlayerSettingsOutput { targetGroup = group.ToString(), companyName = PlayerSettings.companyName, productName = PlayerSettings.productName, bundleVersion = PlayerSettings.bundleVersion, applicationIdentifier = PlayerSettings.GetApplicationIdentifier(group), scriptingDefineSymbols = PlayerSettings.GetScriptingDefineSymbols(target), scriptingBackend = PlayerSettings.GetScriptingBackend(target).ToString() };
+        }
+
+        private static void ValidatePlayerSettingsText(string value, string name)
+        {
+            if (value == null) return;
+            if (value.Length > 1024) throw new ArgumentException(name + " must not exceed 1024 characters.");
+            if (string.IsNullOrWhiteSpace(value)) throw new ArgumentException(name + " must not be empty.");
         }
 
         private static void ValidateTargetSupported(BuildTargetGroup group, BuildTarget target)
