@@ -1,3 +1,4 @@
+#pragma warning disable UAC1001 // MCP command fields use null to represent omitted JSON properties.
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -85,11 +86,11 @@ namespace DucMinh.UnityMcp
             var parent = input.parentInstanceId.HasValue || !string.IsNullOrWhiteSpace(input.parentPath)
                 ? RuntimeCoreTools.RequireGameObject(input.parentInstanceId, input.parentPath).transform
                 : source.transform.parent;
-            if (context.DryRun) return RuntimeCoreTools.Change(context, "Duplicate GameObject '" + RuntimeCoreTools.HierarchyPath(source) + "'.", source.GetInstanceID());
+            if (context.DryRun) return RuntimeCoreTools.Change(context, "Duplicate GameObject '" + RuntimeCoreTools.HierarchyPath(source) + "'.", UnityMcpObjectId.Get(source));
             var clone = UnityEngine.Object.Instantiate(source, parent, false);
             clone.name = string.IsNullOrWhiteSpace(input.name) ? source.name : input.name.Trim();
             UnityMcpUndo.RegisterCreated(clone, "UnityMCP Duplicate GameObject");
-            return RuntimeCoreTools.Change(context, "Duplicated GameObject '" + RuntimeCoreTools.HierarchyPath(source) + "'.", clone.GetInstanceID());
+            return RuntimeCoreTools.Change(context, "Duplicated GameObject '" + RuntimeCoreTools.HierarchyPath(source) + "'.", UnityMcpObjectId.Get(clone));
         }
 
         [UnityMcpTool("component-set-properties", Description = "Set multiple public Component fields or properties; dry-run unless apply is true.", Category = "component", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -111,7 +112,7 @@ namespace DucMinh.UnityMcp
                 }
                 finally { UnityMcpUndo.End(undoGroup); }
             }
-            return RuntimeCoreTools.Change(context, "Set " + writes.Count + " properties on " + component.GetType().FullName + ".", component.GetInstanceID());
+            return RuntimeCoreTools.Change(context, "Set " + writes.Count + " properties on " + component.GetType().FullName + ".", UnityMcpObjectId.Get(component));
         }
 
         [UnityMcpTool("type-schema", Description = "Describe public fields and properties for a supported CLR or Unity type.", Category = "component", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.SafeRead)]
@@ -187,7 +188,7 @@ namespace DucMinh.UnityMcp
             if (input.direction.sqrMagnitude < 0.000001f) throw new ArgumentException("direction must be non-zero.");
             var trigger = input.includeTriggers ? QueryTriggerInteraction.Collide : QueryTriggerInteraction.Ignore;
             if (!Physics.Raycast(input.origin, input.direction.normalized, out var hit, input.maxDistance, input.layerMask, trigger)) return new PhysicsRaycastOutput();
-            return new PhysicsRaycastOutput { hit = true, colliderInstanceId = hit.collider.GetInstanceID(), gameObjectPath = RuntimeCoreTools.HierarchyPath(hit.collider.gameObject), point = hit.point, normal = hit.normal, distance = hit.distance };
+            return new PhysicsRaycastOutput { hit = true, colliderInstanceId = UnityMcpObjectId.Get(hit.collider), gameObjectPath = RuntimeCoreTools.HierarchyPath(hit.collider.gameObject), point = hit.point, normal = hit.normal, distance = hit.distance };
         }
 
         [UnityMcpTool("physics-overlap", Description = "Perform a bounded sphere or box overlap query.", Category = "physics", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.SafeRead)]
@@ -208,9 +209,9 @@ namespace DucMinh.UnityMcp
             }
             else throw new ArgumentException("shape must be 'sphere' or 'box'.");
             var output = new PhysicsOverlapOutput();
-            foreach (var collider in colliders.Where(value => value != null).OrderBy(value => value.GetInstanceID()))
+            foreach (var collider in colliders.Where(value => value != null).OrderBy(UnityMcpObjectId.Get))
             {
-                if (output.matches.Any(match => match.instanceId == collider.gameObject.GetInstanceID())) continue;
+                if (output.matches.Any(match => match.instanceId == UnityMcpObjectId.Get(collider.gameObject))) continue;
                 if (output.matches.Count >= limit) { output.truncated = true; break; }
                 output.matches.Add(RuntimeCoreTools.Summary(collider.gameObject));
             }
@@ -229,14 +230,14 @@ namespace DucMinh.UnityMcp
         public static ChangeOutput AudioSourceCreate(AudioSourceCreateInput input, UnityMcpContext context)
         {
             var target = RuntimeCoreTools.RequireGameObject(input.instanceId, input.path);
-            if (context.DryRun) return RuntimeCoreTools.Change(context, "Add AudioSource to '" + RuntimeCoreTools.HierarchyPath(target) + "'.", target.GetInstanceID());
+            if (context.DryRun) return RuntimeCoreTools.Change(context, "Add AudioSource to '" + RuntimeCoreTools.HierarchyPath(target) + "'.", UnityMcpObjectId.Get(target));
             var source = UnityMcpUndo.AddComponent(target, typeof(AudioSource)) as AudioSource;
             if (source == null) throw new InvalidOperationException("Unity did not create an AudioSource.");
             if (!string.IsNullOrWhiteSpace(input.resourcePath)) source.clip = Resources.Load<AudioClip>(input.resourcePath);
             if (input.loop.HasValue) source.loop = input.loop.Value;
             if (input.volume.HasValue) source.volume = Mathf.Clamp01(input.volume.Value);
             if (input.playOnAwake.HasValue) source.playOnAwake = input.playOnAwake.Value;
-            return RuntimeCoreTools.Change(context, "Added AudioSource to '" + RuntimeCoreTools.HierarchyPath(target) + "'.", source.GetInstanceID());
+            return RuntimeCoreTools.Change(context, "Added AudioSource to '" + RuntimeCoreTools.HierarchyPath(target) + "'.", UnityMcpObjectId.Get(source));
         }
 
         [UnityMcpTool("audio-source-set", Description = "Set AudioSource properties; dry-run unless apply is true.", Category = "audio", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -257,14 +258,20 @@ namespace DucMinh.UnityMcp
                 if (input.spatialBlend.HasValue) source.spatialBlend = input.spatialBlend.Value;
                 if (input.play.HasValue) { if (input.play.Value) source.Play(); else source.Stop(); }
             }
-            return RuntimeCoreTools.Change(context, "Updated AudioSource on '" + RuntimeCoreTools.HierarchyPath(source.gameObject) + "'.", source.GetInstanceID());
+            return RuntimeCoreTools.Change(context, "Updated AudioSource on '" + RuntimeCoreTools.HierarchyPath(source.gameObject) + "'.", UnityMcpObjectId.Get(source));
         }
 
         [UnityMcpTool("camera-list", Description = "List loaded Camera components.", Category = "camera", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.SafeRead)]
         public static CameraListOutput CameraList(EmptyInput input)
         {
             var output = new CameraListOutput();
-            foreach (var camera in UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsInactive.Include, FindObjectsSortMode.InstanceID)) output.cameras.Add(ToCameraInfo(camera));
+#if UNITY_6000_5_OR_NEWER
+            foreach (var camera in UnityEngine.Object.FindObjectsByType<Camera>()) output.cameras.Add(ToCameraInfo(camera));
+#else
+#pragma warning disable CS0618
+            foreach (var camera in UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsSortMode.InstanceID)) output.cameras.Add(ToCameraInfo(camera));
+#pragma warning restore CS0618
+#endif
             return output;
         }
 
@@ -292,7 +299,7 @@ namespace DucMinh.UnityMcp
                 if (input.backgroundColor.HasValue) camera.backgroundColor = input.backgroundColor.Value;
                 if (input.rect.HasValue) camera.rect = input.rect.Value;
             }
-            return RuntimeCoreTools.Change(context, "Updated Camera '" + RuntimeCoreTools.HierarchyPath(camera.gameObject) + "'.", camera.GetInstanceID());
+            return RuntimeCoreTools.Change(context, "Updated Camera '" + RuntimeCoreTools.HierarchyPath(camera.gameObject) + "'.", UnityMcpObjectId.Get(camera));
         }
 
         [UnityMcpTool("particle-set", Description = "Set basic ParticleSystem main-module properties; dry-run unless apply is true.", Category = "vfx", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -313,7 +320,7 @@ namespace DucMinh.UnityMcp
                 if (input.looping.HasValue) main.loop = input.looping.Value;
                 if (input.play.HasValue) { if (input.play.Value) system.Play(true); else system.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear); }
             }
-            return RuntimeCoreTools.Change(context, "Updated ParticleSystem on '" + RuntimeCoreTools.HierarchyPath(target) + "'.", system.GetInstanceID());
+            return RuntimeCoreTools.Change(context, "Updated ParticleSystem on '" + RuntimeCoreTools.HierarchyPath(target) + "'.", UnityMcpObjectId.Get(system));
         }
 
         [UnityMcpTool("particle-create", Description = "Create and configure a Shuriken ParticleSystem GameObject; dry-run unless apply is true.", Category = "vfx", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -340,7 +347,7 @@ namespace DucMinh.UnityMcp
             if (input.looping.HasValue) main.loop = input.looping.Value;
             if (input.maxParticles.HasValue) main.maxParticles = input.maxParticles.Value;
             main.playOnAwake = input.playOnAwake;
-            return RuntimeCoreTools.Change(context, "Created ParticleSystem '" + RuntimeCoreTools.HierarchyPath(target) + "'.", system.GetInstanceID());
+            return RuntimeCoreTools.Change(context, "Created ParticleSystem '" + RuntimeCoreTools.HierarchyPath(target) + "'.", UnityMcpObjectId.Get(system));
         }
 
         [UnityMcpTool("particle-get", Description = "Read supported Shuriken ParticleSystem module settings.", Category = "vfx", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.SafeRead)]
@@ -350,7 +357,7 @@ namespace DucMinh.UnityMcp
             var main = system.main; var emission = system.emission; var shape = system.shape; var velocity = system.velocityOverLifetime;
             var color = system.colorOverLifetime; var size = system.sizeOverLifetime; var noise = system.noise; var trails = system.trails; var collision = system.collision;
             var renderer = system.GetComponent<ParticleSystemRenderer>();
-            return new ParticleInfoOutput { instanceId = system.GetInstanceID(), path = RuntimeCoreTools.HierarchyPath(system.gameObject), isPlaying = system.isPlaying, duration = main.duration, startLifetime = main.startLifetime.constant, startSpeed = main.startSpeed.constant, startSize = main.startSize.constant, startColor = main.startColor.color, looping = main.loop, maxParticles = main.maxParticles, emissionEnabled = emission.enabled, rateOverTime = emission.rateOverTime.constant, shapeEnabled = shape.enabled, shapeType = shape.shapeType.ToString(), shapeRadius = shape.radius, velocityOverLifetimeEnabled = velocity.enabled, colorOverLifetimeEnabled = color.enabled, sizeOverLifetimeEnabled = size.enabled, noiseEnabled = noise.enabled, trailsEnabled = trails.enabled, collisionEnabled = collision.enabled, renderMode = renderer.renderMode.ToString(), sortingOrder = renderer.sortingOrder };
+            return new ParticleInfoOutput { instanceId = UnityMcpObjectId.Get(system), path = RuntimeCoreTools.HierarchyPath(system.gameObject), isPlaying = system.isPlaying, duration = main.duration, startLifetime = main.startLifetime.constant, startSpeed = main.startSpeed.constant, startSize = main.startSize.constant, startColor = main.startColor.color, looping = main.loop, maxParticles = main.maxParticles, emissionEnabled = emission.enabled, rateOverTime = emission.rateOverTime.constant, shapeEnabled = shape.enabled, shapeType = shape.shapeType.ToString(), shapeRadius = shape.radius, velocityOverLifetimeEnabled = velocity.enabled, colorOverLifetimeEnabled = color.enabled, sizeOverLifetimeEnabled = size.enabled, noiseEnabled = noise.enabled, trailsEnabled = trails.enabled, collisionEnabled = collision.enabled, renderMode = renderer.renderMode.ToString(), sortingOrder = renderer.sortingOrder };
         }
 
         [UnityMcpTool("particle-configure", Description = "Configure typed Shuriken main, emission, shape, velocity, color/size-over-lifetime, noise, trails, collision, and renderer settings; dry-run unless apply is true.", Category = "vfx", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -380,7 +387,7 @@ namespace DucMinh.UnityMcp
                 var collision = system.collision; if (input.collisionEnabled.HasValue) collision.enabled = input.collisionEnabled.Value; if (input.collisionType != null) collision.type = ParseEnum<ParticleSystemCollisionType>(input.collisionType, nameof(input.collisionType)); if (input.collisionDampen.HasValue) collision.dampenMultiplier = RequireRange(input.collisionDampen.Value, 0f, 1f, nameof(input.collisionDampen));
                 var renderer = system.GetComponent<ParticleSystemRenderer>(); if (input.renderMode != null) renderer.renderMode = ParseEnum<ParticleSystemRenderMode>(input.renderMode, nameof(input.renderMode)); if (input.sortingOrder.HasValue) renderer.sortingOrder = input.sortingOrder.Value;
             }
-            return RuntimeCoreTools.Change(context, "Configured ParticleSystem on '" + RuntimeCoreTools.HierarchyPath(system.gameObject) + "'.", system.GetInstanceID());
+            return RuntimeCoreTools.Change(context, "Configured ParticleSystem on '" + RuntimeCoreTools.HierarchyPath(system.gameObject) + "'.", UnityMcpObjectId.Get(system));
         }
 
         [UnityMcpTool("particle-preview", Description = "Play, stop, clear, or deterministically simulate a Shuriken ParticleSystem; dry-run unless apply is true.", Category = "vfx", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -391,7 +398,7 @@ namespace DucMinh.UnityMcp
             if (action != "play" && action != "stop" && action != "clear" && action != "simulate") throw new ArgumentException("action must be play, stop, clear, or simulate.");
             if (action == "simulate" && input.simulateTime < 0f) throw new ArgumentOutOfRangeException(nameof(input.simulateTime));
             if (!context.DryRun) { if (action == "play") system.Play(input.withChildren); else if (action == "stop") system.Stop(input.withChildren, ParticleSystemStopBehavior.StopEmittingAndClear); else if (action == "clear") system.Clear(input.withChildren); else system.Simulate(input.simulateTime, input.withChildren, true, true); }
-            return RuntimeCoreTools.Change(context, "ParticleSystem " + action + " on '" + RuntimeCoreTools.HierarchyPath(system.gameObject) + "'.", system.GetInstanceID());
+            return RuntimeCoreTools.Change(context, "ParticleSystem " + action + " on '" + RuntimeCoreTools.HierarchyPath(system.gameObject) + "'.", UnityMcpObjectId.Get(system));
         }
 
         private static ParticleSystem RequireParticleSystem(int? instanceId, string path, int componentIndex)
@@ -475,7 +482,7 @@ namespace DucMinh.UnityMcp
 
         private static CameraInfo ToCameraInfo(Camera camera) => new CameraInfo
         {
-            instanceId = camera.GetInstanceID(), name = camera.name, path = RuntimeCoreTools.HierarchyPath(camera.gameObject), enabled = camera.enabled,
+            instanceId = UnityMcpObjectId.Get(camera), name = camera.name, path = RuntimeCoreTools.HierarchyPath(camera.gameObject), enabled = camera.enabled,
             orthographic = camera.orthographic, fieldOfView = camera.fieldOfView, orthographicSize = camera.orthographicSize,
             nearClipPlane = camera.nearClipPlane, farClipPlane = camera.farClipPlane, cullingMask = camera.cullingMask,
             backgroundColor = camera.backgroundColor, rect = camera.rect

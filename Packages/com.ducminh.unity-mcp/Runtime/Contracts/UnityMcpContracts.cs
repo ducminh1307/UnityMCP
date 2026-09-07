@@ -1,3 +1,4 @@
+#pragma warning disable UAC1001, UAC1015 // MCP protocol DTOs are JSON-only, never scene/prefab data.
 using System;
 using System.Collections.Generic;
 using System.Threading;

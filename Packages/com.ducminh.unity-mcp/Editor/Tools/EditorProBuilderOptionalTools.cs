@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005 // Editor tool reflection scans currently loaded ProBuilder types.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -103,7 +104,7 @@ namespace DucMinh.UnityMcp.Editor
                 created = !context.DryRun,
                 primitive = primitive,
                 name = name,
-                parentGameObjectInstanceId = parent == null ? (int?)null : parent.GetInstanceID(),
+                parentGameObjectInstanceId = parent == null ? (int?)null : UnityMcpObjectId.Get(parent),
                 size = size,
                 worldPosition = position,
                 rollbackSupported = true,
@@ -123,8 +124,8 @@ namespace DucMinh.UnityMcp.Editor
             EditorUtility.SetDirty(component);
             EditorSceneManager.MarkSceneDirty(gameObject.scene);
 
-            output.gameObjectInstanceId = gameObject.GetInstanceID();
-            output.proBuilderMeshInstanceId = component.GetInstanceID();
+            output.gameObjectInstanceId = UnityMcpObjectId.Get(gameObject);
+            output.proBuilderMeshInstanceId = UnityMcpObjectId.Get(component);
             output.vertexCount = ReadVertexPositions(mesh).Count;
             return output;
         }
@@ -144,7 +145,7 @@ namespace DucMinh.UnityMcp.Editor
             {
                 dryRun = context.DryRun,
                 changed = !context.DryRun,
-                proBuilderMeshInstanceId = component.GetInstanceID(),
+                proBuilderMeshInstanceId = UnityMcpObjectId.Get(component),
                 vertexCount = positions.Count,
                 editedVertexCount = indexes.Count,
                 localOffset = offset,
@@ -177,7 +178,7 @@ namespace DucMinh.UnityMcp.Editor
         private static object RequireProBuilderMesh(int instanceId)
         {
             var meshType = RequireType(ProBuilderMeshTypeName);
-            var target = EditorUtility.EntityIdToObject((EntityId)instanceId);
+            var target = UnityMcpEditorObjectId.Resolve(instanceId);
             if (target == null || !meshType.IsInstanceOfType(target))
                 throw new ArgumentException("proBuilderMeshInstanceId must identify a loaded UnityEngine.ProBuilder.ProBuilderMesh component.");
             var component = target as Component;
@@ -257,7 +258,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private static GameObject RequireSceneGameObject(int instanceId, string parameterName)
         {
-            var target = EditorUtility.EntityIdToObject((EntityId)instanceId) as GameObject;
+            var target = UnityMcpEditorObjectId.Resolve(instanceId) as GameObject;
             if (target == null || !target.scene.IsValid() || !target.scene.isLoaded)
                 throw new ArgumentException(parameterName + " must identify a GameObject in a loaded scene.");
             return target;

@@ -111,10 +111,10 @@ namespace DucMinh.UnityMcp.Tests
 
                 Assert.That(output.totalRoots, Is.EqualTo(1));
                 Assert.That(output.roots, Has.Count.EqualTo(1));
-                Assert.That(output.roots[0].instanceId, Is.EqualTo(root.GetInstanceID()));
+                Assert.That(output.roots[0].instanceId, Is.EqualTo(UnityMcpObjectId.Get(root)));
                 Assert.That(output.roots[0].componentTypes, Is.Empty);
                 Assert.That(output.roots[0].children, Has.Count.EqualTo(1));
-                Assert.That(output.roots[0].children[0].instanceId, Is.EqualTo(child.GetInstanceID()));
+                Assert.That(output.roots[0].children[0].instanceId, Is.EqualTo(UnityMcpObjectId.Get(child)));
                 Assert.That(output.roots[0].children[0].componentTypes, Is.Empty);
             }
             finally

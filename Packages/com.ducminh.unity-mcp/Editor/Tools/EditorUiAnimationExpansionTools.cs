@@ -145,7 +145,7 @@ namespace DucMinh.UnityMcp.Editor
                 if (!RectTransformUtility.RectangleContainsScreenPoint(rect, input.screenPosition, camera)) continue;
                 output.hits.Add(new UiRaycastHit
                 {
-                    instanceId = rect.gameObject.GetInstanceID(),
+                    instanceId = UnityMcpObjectId.Get(rect.gameObject),
                     name = rect.gameObject.name,
                     hierarchyPath = HierarchyPath(rect.gameObject),
                     hierarchyDepth = HierarchyDepth(rect),
@@ -289,7 +289,7 @@ namespace DucMinh.UnityMcp.Editor
                 dryRun = context.DryRun,
                 changed = !context.DryRun,
                 summary = summary,
-                instanceId = gameObject == null ? (int?)null : gameObject.GetInstanceID(),
+                instanceId = gameObject == null ? (int?)null : UnityMcpObjectId.Get(gameObject),
                 hierarchyPath = gameObject == null ? null : HierarchyPath(gameObject),
                 elementType = elementType
             };
@@ -339,7 +339,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private static GameObject RequireSceneGameObject(int instanceId)
         {
-            var value = EditorUtility.EntityIdToObject((EntityId)instanceId);
+            var value = UnityMcpEditorObjectId.Resolve(instanceId);
             var gameObject = value as GameObject ?? (value as Component)?.gameObject;
             if (gameObject == null || !gameObject.scene.IsValid() || !gameObject.scene.isLoaded) throw new ArgumentException("A loaded scene GameObject was not found for instanceId.");
             return gameObject;
@@ -387,7 +387,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private static int SiblingIndex(int instanceId)
         {
-            var gameObject = EditorUtility.EntityIdToObject((EntityId)instanceId) as GameObject;
+            var gameObject = UnityMcpEditorObjectId.Resolve(instanceId) as GameObject;
             return gameObject == null ? 0 : gameObject.transform.GetSiblingIndex();
         }
 
@@ -457,7 +457,7 @@ namespace DucMinh.UnityMcp.Editor
             if (mesh == null) return;
             var triangles = MeshTriangleCount(mesh);
             item.rendererTriangleInstances += triangles;
-            if (!uniqueMeshes.Add(mesh.GetInstanceID())) return;
+            if (!uniqueMeshes.Add(UnityMcpObjectId.Get(mesh))) return;
             item.uniqueMeshCount++;
             item.uniqueMeshVertices += mesh.vertexCount;
             item.uniqueMeshTriangles += triangles;

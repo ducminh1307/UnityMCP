@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005 // Editor tool reflection scans currently loaded NavMesh types.
 using System;
 using System.Reflection;
 using UnityEditor;
@@ -57,7 +58,7 @@ namespace DucMinh.UnityMcp.Editor
         {
             var requiredType = FindType("Unity.AI.Navigation.NavMeshSurface")
                 ?? throw new InvalidOperationException("The AI Navigation package is not available.");
-            var target = EditorUtility.EntityIdToObject((EntityId)instanceId) as Component;
+            var target = UnityMcpEditorObjectId.Resolve(instanceId) as Component;
             if (target == null || !requiredType.IsInstanceOfType(target))
                 throw new ArgumentException("surfaceInstanceId must identify a loaded Unity.AI.Navigation.NavMeshSurface component.");
             buildMethod = requiredType.GetMethod("BuildNavMesh", BindingFlags.Instance | BindingFlags.Public, null, Type.EmptyTypes, null);
@@ -102,7 +103,7 @@ namespace DucMinh.UnityMcp.Editor
                 started = true;
                 job.status = "running";
                 buildMethod.Invoke(surface, null);
-                EditorWorkflowJobRunner.Succeed(job, new { status = "succeeded", surfaceInstanceId = surface.GetInstanceID() });
+                EditorWorkflowJobRunner.Succeed(job, new { status = "succeeded", surfaceInstanceId = UnityMcpObjectId.Get(surface) });
                 return true;
             }
         }

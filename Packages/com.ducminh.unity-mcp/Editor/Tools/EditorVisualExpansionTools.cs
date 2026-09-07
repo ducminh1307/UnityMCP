@@ -58,7 +58,7 @@ namespace DucMinh.UnityMcp.Editor
         {
             if (!input.instanceId.HasValue) throw new ArgumentException("instanceId is required.");
             ValidateExistingAsset(input.materialPath, ".mat");
-            var target = EditorUtility.EntityIdToObject((EntityId)input.instanceId.Value) as GameObject;
+            var target = UnityMcpEditorObjectId.Resolve(input.instanceId.Value) as GameObject;
             if (target == null || !target.scene.IsValid()) throw new ArgumentException("instanceId must identify a loaded scene GameObject.");
             var renderers = target.GetComponents<Renderer>();
             if (input.rendererIndex < 0 || input.rendererIndex >= renderers.Length) throw new ArgumentOutOfRangeException(nameof(input.rendererIndex));
@@ -74,7 +74,7 @@ namespace DucMinh.UnityMcp.Editor
                 renderer.sharedMaterials = materials;
                 EditorUtility.SetDirty(renderer);
             }
-            return Change(context, "Assign material '" + input.materialPath + "' to renderer slot " + input.materialIndex + ".", target.GetInstanceID());
+            return Change(context, "Assign material '" + input.materialPath + "' to renderer slot " + input.materialIndex + ".", UnityMcpObjectId.Get(target));
         }
 
         [UnityMcpTool("shader-list", Description = "List project Shader assets with a bounded search.", Category = "shader", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
@@ -237,7 +237,7 @@ namespace DucMinh.UnityMcp.Editor
 
         internal static Camera ResolveLoadedCamera(int instanceId, string errorMessage)
         {
-            var target = EditorUtility.EntityIdToObject((EntityId)instanceId);
+            var target = UnityMcpEditorObjectId.Resolve(instanceId);
             var camera = target as Camera ?? (target as GameObject)?.GetComponent<Camera>();
             if (camera == null || !camera.gameObject.scene.IsValid()) throw new ArgumentException(errorMessage);
             return camera;
@@ -278,7 +278,7 @@ namespace DucMinh.UnityMcp.Editor
                 var png = texture.EncodeToPNG();
                 var cameraName = camera.name ?? string.Empty;
                 if (cameraName.Length > MaxScreenshotCameraNameCharacters) cameraName = cameraName.Substring(0, MaxScreenshotCameraNameCharacters);
-                info = new ScreenshotInfo { cameraInstanceId = camera.GetInstanceID(), cameraName = cameraName, width = width, height = height };
+                info = new ScreenshotInfo { cameraInstanceId = UnityMcpObjectId.Get(camera), cameraName = cameraName, width = width, height = height };
                 return new UnityMcpResult
                 {
                     content = new List<UnityMcpContent> { new UnityMcpContent { type = "image", data = Convert.ToBase64String(png), mimeType = "image/png" } },

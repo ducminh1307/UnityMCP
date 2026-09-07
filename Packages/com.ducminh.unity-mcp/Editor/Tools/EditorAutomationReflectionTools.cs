@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005 // Editor tool reflection scans currently loaded types.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -110,7 +111,7 @@ namespace DucMinh.UnityMcp.Editor
             var value = ReadMember(member, target);
             return new ObjectMemberOutput
             {
-                instanceId = target.GetInstanceID(),
+                instanceId = UnityMcpObjectId.Get(target),
                 assetPath = AssetDatabase.GetAssetPath(target),
                 type = rule.type.FullName,
                 member = member.Name,
@@ -137,7 +138,7 @@ namespace DucMinh.UnityMcp.Editor
             {
                 dryRun = context.DryRun,
                 changed = !context.DryRun,
-                instanceId = target.GetInstanceID(),
+                instanceId = UnityMcpObjectId.Get(target),
                 type = rule.type.FullName,
                 member = member.Name,
                 summary = "Set allowlisted member '" + member.Name + "' on '" + target.name + "'.",
@@ -185,7 +186,7 @@ namespace DucMinh.UnityMcp.Editor
             var output = new MethodCallOutput
             {
                 dryRun = context.DryRun,
-                instanceId = target.GetInstanceID(),
+                instanceId = UnityMcpObjectId.Get(target),
                 type = rule.type.FullName,
                 method = MethodSignature(method),
                 returnType = FriendlyTypeName(method.ReturnType),
@@ -472,7 +473,7 @@ namespace DucMinh.UnityMcp.Editor
             UnityEngine.Object target;
             if (instanceId.HasValue)
             {
-                target = EditorUtility.EntityIdToObject((EntityId)instanceId.Value);
+                target = UnityMcpEditorObjectId.Resolve(instanceId.Value);
                 if (target == null) throw new ArgumentException("instanceId does not identify a live Unity object.");
             }
             else
@@ -620,7 +621,7 @@ namespace DucMinh.UnityMcp.Editor
                 var unityObject = value as UnityEngine.Object;
                 json = JsonConvert.SerializeObject(unityObject == null ? null : new UnityObjectReference
                 {
-                    instanceId = unityObject.GetInstanceID(),
+                    instanceId = UnityMcpObjectId.Get(unityObject),
                     name = unityObject.name,
                     type = unityObject.GetType().FullName,
                     assetPath = AssetDatabase.GetAssetPath(unityObject)

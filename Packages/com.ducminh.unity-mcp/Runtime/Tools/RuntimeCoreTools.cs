@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005, UAC0009, UAC1001 // Intentional runtime reflection, dev-build gate, and JSON DTO fields.
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -180,7 +181,7 @@ namespace DucMinh.UnityMcp
         {
             var gameObject = RequireGameObject(input.instanceId, input.path);
             var component = RequireComponents(gameObject, input.type).First();
-            return new ComponentInfo { instanceId = component.GetInstanceID(), type = component.GetType().FullName, json = JsonUtility.ToJson(component), enabled = !(component is Behaviour behaviour) || behaviour.enabled };
+            return new ComponentInfo { instanceId = UnityMcpObjectId.Get(component), type = component.GetType().FullName, json = JsonUtility.ToJson(component), enabled = !(component is Behaviour behaviour) || behaviour.enabled };
         }
 
         [UnityMcpTool("gameobject-create", Description = "Create a GameObject; dry-run unless apply is true.", Category = "gameobject", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -193,7 +194,7 @@ namespace DucMinh.UnityMcp
             UnityMcpUndo.RegisterCreated(created, "UnityMCP Create GameObject");
             if (parent != null) created.transform.SetParent(parent.transform, false);
             if (input.localPosition.HasValue) created.transform.localPosition = input.localPosition.Value;
-            return Change(context, $"Created GameObject '{input.name}'.", created.GetInstanceID());
+            return Change(context, $"Created GameObject '{input.name}'.", UnityMcpObjectId.Get(created));
         }
 
         [UnityMcpTool("gameobject-delete", Description = "Destroy a GameObject; dry-run unless apply is true.", Category = "gameobject", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Destructive, SupportsDryRun = true)]
@@ -201,7 +202,7 @@ namespace DucMinh.UnityMcp
         {
             var target = RequireGameObject(input.instanceId, input.path);
             var summary = $"Destroy GameObject '{HierarchyPath(target)}'.";
-            var id = target.GetInstanceID();
+            var id = UnityMcpObjectId.Get(target);
             if (!context.DryRun) UnityMcpUndo.Destroy(target);
             return Change(context, summary, id);
         }
@@ -213,7 +214,7 @@ namespace DucMinh.UnityMcp
             var parent = input.parentInstanceId.HasValue || !string.IsNullOrEmpty(input.parentPath) ? RequireGameObject(input.parentInstanceId, input.parentPath) : null;
             if (parent != null && (parent == target || parent.transform.IsChildOf(target.transform))) throw new ArgumentException("Parent would create a hierarchy cycle.");
             if (!context.DryRun) UnityMcpUndo.SetParent(target.transform, parent == null ? null : parent.transform, input.worldPositionStays, "UnityMCP Set Parent");
-            return Change(context, $"Set parent of '{HierarchyPath(target)}' to '{(parent == null ? "<scene>" : HierarchyPath(parent))}'.", target.GetInstanceID());
+            return Change(context, $"Set parent of '{HierarchyPath(target)}' to '{(parent == null ? "<scene>" : HierarchyPath(parent))}'.", UnityMcpObjectId.Get(target));
         }
 
         [UnityMcpTool("gameobject-set-transform", Description = "Set transform values; dry-run unless apply is true.", Category = "gameobject", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -229,7 +230,7 @@ namespace DucMinh.UnityMcp
                 if (input.worldPosition.HasValue) target.transform.position = input.worldPosition.Value;
                 if (input.worldEulerAngles.HasValue) target.transform.eulerAngles = input.worldEulerAngles.Value;
             }
-            return Change(context, $"Set transform on '{HierarchyPath(target)}'.", target.GetInstanceID());
+            return Change(context, $"Set transform on '{HierarchyPath(target)}'.", UnityMcpObjectId.Get(target));
         }
 
         [UnityMcpTool("gameobject-set-properties", Description = "Set common GameObject properties; dry-run unless apply is true.", Category = "gameobject", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -245,7 +246,7 @@ namespace DucMinh.UnityMcp
                 if (input.layer.HasValue) target.layer = input.layer.Value;
                 if (input.tag != null) target.tag = input.tag;
             }
-            return Change(context, $"Set properties on '{HierarchyPath(target)}'.", target.GetInstanceID());
+            return Change(context, $"Set properties on '{HierarchyPath(target)}'.", UnityMcpObjectId.Get(target));
         }
 
         [UnityMcpTool("component-add", Description = "Add a Component; dry-run unless apply is true.", Category = "component", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -253,9 +254,9 @@ namespace DucMinh.UnityMcp
         {
             var target = RequireGameObject(input.instanceId, input.path);
             var type = RequireComponentType(input.type);
-            if (context.DryRun) return Change(context, $"Add {type.FullName} to '{HierarchyPath(target)}'.", target.GetInstanceID());
+            if (context.DryRun) return Change(context, $"Add {type.FullName} to '{HierarchyPath(target)}'.", UnityMcpObjectId.Get(target));
             var component = UnityMcpUndo.AddComponent(target, type);
-            return Change(context, $"Added {type.FullName}.", component.GetInstanceID());
+            return Change(context, $"Added {type.FullName}.", UnityMcpObjectId.Get(component));
         }
 
         [UnityMcpTool("component-remove", Description = "Remove a Component; dry-run unless apply is true.", Category = "component", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Destructive, SupportsDryRun = true)]
@@ -266,7 +267,7 @@ namespace DucMinh.UnityMcp
             if (input.componentIndex < 0 || input.componentIndex >= components.Length) throw new ArgumentOutOfRangeException(nameof(input.componentIndex));
             var component = components[input.componentIndex];
             if (component is Transform) throw new InvalidOperationException("Transform cannot be removed.");
-            var componentId = component.GetInstanceID();
+            var componentId = UnityMcpObjectId.Get(component);
             if (!context.DryRun) UnityMcpUndo.Destroy(component);
             return Change(context, $"Remove {component.GetType().FullName} from '{HierarchyPath(target)}'.", componentId);
         }
@@ -284,7 +285,7 @@ namespace DucMinh.UnityMcp
             if (valueType == null) throw new ArgumentException("A writable public field/property was not found.");
             var value = JsonConvert.DeserializeObject(input.valueJson ?? "null", valueType);
             if (!context.DryRun) { UnityMcpUndo.Record(component, "UnityMCP Set Component Property"); if (field != null) field.SetValue(component, value); else property.SetValue(component, value); }
-            return Change(context, $"Set {component.GetType().FullName}.{input.property}.", component.GetInstanceID());
+            return Change(context, $"Set {component.GetType().FullName}.{input.property}.", UnityMcpObjectId.Get(component));
         }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -377,7 +378,7 @@ namespace DucMinh.UnityMcp
             GameObject byPath = null;
             if (instanceId.HasValue)
             {
-                byInstanceId = AllSceneObjects().FirstOrDefault(go => go.GetInstanceID() == instanceId.Value);
+                byInstanceId = AllSceneObjects().FirstOrDefault(go => UnityMcpObjectId.Get(go) == instanceId.Value);
                 if (byInstanceId == null) throw new ArgumentException("GameObject instanceId was not found.");
             }
             if (!string.IsNullOrWhiteSpace(path))
@@ -432,15 +433,15 @@ namespace DucMinh.UnityMcp
 
         internal static GameObjectSummary Summary(GameObject gameObject) => new GameObjectSummary
         {
-            instanceId = gameObject.GetInstanceID(), name = gameObject.name, path = HierarchyPath(gameObject), scene = gameObject.scene.name,
+            instanceId = UnityMcpObjectId.Get(gameObject), name = gameObject.name, path = HierarchyPath(gameObject), scene = gameObject.scene.name,
             activeSelf = gameObject.activeSelf, activeInHierarchy = gameObject.activeInHierarchy
         };
 
         internal static GameObjectInfo Info(GameObject gameObject) => new GameObjectInfo
         {
-            instanceId = gameObject.GetInstanceID(), name = gameObject.name, path = HierarchyPath(gameObject), scene = gameObject.scene.name,
+            instanceId = UnityMcpObjectId.Get(gameObject), name = gameObject.name, path = HierarchyPath(gameObject), scene = gameObject.scene.name,
             activeSelf = gameObject.activeSelf, activeInHierarchy = gameObject.activeInHierarchy, tag = gameObject.tag, layer = gameObject.layer,
-            parentInstanceId = gameObject.transform.parent == null ? (int?)null : gameObject.transform.parent.gameObject.GetInstanceID(),
+            parentInstanceId = gameObject.transform.parent == null ? (int?)null : UnityMcpObjectId.Get(gameObject.transform.parent.gameObject),
             transform = new TransformInfo { localPosition = gameObject.transform.localPosition, localRotation = gameObject.transform.localRotation, localScale = gameObject.transform.localScale, worldPosition = gameObject.transform.position, worldRotation = gameObject.transform.rotation },
             componentTypes = gameObject.GetComponents<Component>().Where(c => c != null).Select(c => c.GetType().FullName).ToList()
         };
@@ -449,7 +450,7 @@ namespace DucMinh.UnityMcp
         {
             var node = new GameObjectNode
             {
-                instanceId = gameObject.GetInstanceID(), name = gameObject.name, path = HierarchyPath(gameObject), activeSelf = gameObject.activeSelf,
+                instanceId = UnityMcpObjectId.Get(gameObject), name = gameObject.name, path = HierarchyPath(gameObject), activeSelf = gameObject.activeSelf,
                 activeInHierarchy = gameObject.activeInHierarchy, tag = gameObject.tag, layer = gameObject.layer, hideFlags = (int)gameObject.hideFlags,
                 componentTypes = gameObject.GetComponents<Component>().Where(c => c != null).Select(c => c.GetType().FullName).ToList()
             };

@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005 // Runtime reflection must enumerate currently loaded assemblies.
 using System;
 using System.Reflection;
 using System.Linq;

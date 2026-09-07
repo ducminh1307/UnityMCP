@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005 // Editor tool reflection scans currently loaded test assemblies.
 using System;
 using System.Collections.Generic;
 using System.Linq;

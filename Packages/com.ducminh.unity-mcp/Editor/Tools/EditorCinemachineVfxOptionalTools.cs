@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005 // Editor tool reflection scans currently loaded optional package types.
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -94,9 +95,9 @@ namespace DucMinh.UnityMcp.Editor
                     dryRun = true,
                     created = false,
                     name = name,
-                    parentGameObjectInstanceId = parent == null ? (int?)null : parent.GetInstanceID(),
-                    followGameObjectInstanceId = follow == null ? (int?)null : follow.GetInstanceID(),
-                    lookAtGameObjectInstanceId = lookAt == null ? (int?)null : lookAt.GetInstanceID(),
+                    parentGameObjectInstanceId = parent == null ? (int?)null : UnityMcpObjectId.Get(parent),
+                    followGameObjectInstanceId = follow == null ? (int?)null : UnityMcpObjectId.Get(follow),
+                    lookAtGameObjectInstanceId = lookAt == null ? (int?)null : UnityMcpObjectId.Get(lookAt),
                     priority = input.priority,
                     rollbackSupported = true,
                     journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "create-cinemachine-camera", after = name } }
@@ -117,14 +118,14 @@ namespace DucMinh.UnityMcp.Editor
             {
                 dryRun = false,
                 created = true,
-                instanceId = component.GetInstanceID(),
+                instanceId = UnityMcpObjectId.Get(component),
                 name = created.name,
-                parentGameObjectInstanceId = parent == null ? (int?)null : parent.GetInstanceID(),
-                followGameObjectInstanceId = follow == null ? (int?)null : follow.GetInstanceID(),
-                lookAtGameObjectInstanceId = lookAt == null ? (int?)null : lookAt.GetInstanceID(),
+                parentGameObjectInstanceId = parent == null ? (int?)null : UnityMcpObjectId.Get(parent),
+                followGameObjectInstanceId = follow == null ? (int?)null : UnityMcpObjectId.Get(follow),
+                lookAtGameObjectInstanceId = lookAt == null ? (int?)null : UnityMcpObjectId.Get(lookAt),
                 priority = input.priority,
                 rollbackSupported = true,
-                journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "create-cinemachine-camera", after = component.GetInstanceID().ToString() } }
+                journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "create-cinemachine-camera", after = UnityMcpObjectId.Get(component).ToString() } }
             };
         }
 
@@ -132,7 +133,7 @@ namespace DucMinh.UnityMcp.Editor
         public static VfxGraphSetOutput VfxGraphSet(VfxGraphSetInput input, UnityMcpContext context)
         {
             var effectType = RequireType("UnityEngine.VFX.VisualEffect");
-            var target = EditorUtility.EntityIdToObject((EntityId)input.visualEffectInstanceId);
+            var target = UnityMcpEditorObjectId.Resolve(input.visualEffectInstanceId);
             if (target == null || !effectType.IsInstanceOfType(target))
                 throw new ArgumentException("visualEffectInstanceId must identify a loaded VisualEffect component.");
             var component = target as Component;
@@ -150,7 +151,7 @@ namespace DucMinh.UnityMcp.Editor
             {
                 dryRun = context.DryRun,
                 changed = !context.DryRun,
-                visualEffectInstanceId = target.GetInstanceID(),
+                visualEffectInstanceId = UnityMcpObjectId.Get(target),
                 propertyCount = writes.Count,
                 propertyNames = writes.Select(write => write.name).ToList(),
                 rollbackSupported = true,
@@ -301,7 +302,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private static GameObject RequireSceneGameObject(int instanceId, string inputName)
         {
-            var value = EditorUtility.EntityIdToObject((EntityId)instanceId);
+            var value = UnityMcpEditorObjectId.Resolve(instanceId);
             var gameObject = value as GameObject ?? (value as Component)?.gameObject;
             if (gameObject == null || !gameObject.scene.IsValid() || !gameObject.scene.isLoaded)
                 throw new ArgumentException(inputName + " must identify a GameObject or Component in a loaded scene.");

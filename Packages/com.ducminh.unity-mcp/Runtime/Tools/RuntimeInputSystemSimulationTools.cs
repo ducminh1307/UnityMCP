@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005, UAC1001 // Intentional runtime reflection and JSON command DTO fields.
 using System;
 using System.Collections.Generic;
 using System.Linq;

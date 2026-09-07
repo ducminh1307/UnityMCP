@@ -262,7 +262,7 @@ namespace DucMinh.UnityMcp.Editor
         [UnityMcpTool("screenshot-gameobject", Description = "Capture Unity's generated preview image for a GameObject or Component as PNG.", Category = "visual", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
         public static UnityMcpResult ScreenshotGameObject(ScreenshotGameObjectInput input)
         {
-            var target = EditorUtility.EntityIdToObject((EntityId)input.instanceId);
+            var target = UnityMcpEditorObjectId.Resolve(input.instanceId);
             var gameObject = target as GameObject ?? (target as Component)?.gameObject;
             if (gameObject == null) throw new ArgumentException("instanceId must identify a GameObject or Component.");
             var width = Mathf.Clamp(input.width, 16, 2048);
@@ -279,7 +279,7 @@ namespace DucMinh.UnityMcp.Editor
                 texture.ReadPixels(new Rect(0, 0, width, height), 0, 0);
                 texture.Apply(false, false);
                 var data = texture.EncodeToPNG();
-                var output = new ScreenshotGameObjectOutput { instanceId = gameObject.GetInstanceID(), name = gameObject.name, source = "unity-asset-preview", width = width, height = height };
+                var output = new ScreenshotGameObjectOutput { instanceId = UnityMcpObjectId.Get(gameObject), name = gameObject.name, source = "unity-asset-preview", width = width, height = height };
                 return new UnityMcpResult
                 {
                     content = new List<UnityMcpContent> { new UnityMcpContent { type = "image", data = Convert.ToBase64String(data), mimeType = "image/png" } },
@@ -376,7 +376,7 @@ namespace DucMinh.UnityMcp.Editor
                         var objectValue = getObject.Invoke(null, new object[] { index }) as UnityEngine.Object;
                         if (objectValue != null)
                         {
-                            summary.objectInstanceId = objectValue.GetInstanceID();
+                            summary.objectInstanceId = UnityMcpObjectId.Get(objectValue);
                             summary.objectName = objectValue.name;
                             summary.objectType = objectValue.GetType().FullName;
                         }

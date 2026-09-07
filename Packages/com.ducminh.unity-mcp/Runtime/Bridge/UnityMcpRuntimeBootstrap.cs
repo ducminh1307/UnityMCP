@@ -1,3 +1,4 @@
+#pragma warning disable UAC0009 // DEVELOPMENT_BUILD intentionally gates the runtime MCP transport.
 #if DEVELOPMENT_BUILD && !UNITY_EDITOR && (UNITY_STANDALONE_WIN || UNITY_STANDALONE_OSX || UNITY_STANDALONE_LINUX)
 using UnityEngine;
 

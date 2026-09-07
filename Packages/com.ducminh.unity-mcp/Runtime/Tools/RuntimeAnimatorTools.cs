@@ -1,3 +1,4 @@
+#pragma warning disable UAC1001 // MCP command fields use null to represent omitted JSON properties.
 using System;
 using UnityEngine;
 
@@ -58,7 +59,7 @@ namespace DucMinh.UnityMcp
             {
                 dryRun = context.DryRun,
                 changed = !context.DryRun,
-                instanceId = animator.GetInstanceID(),
+                instanceId = UnityMcpObjectId.Get(animator),
                 parameter = input.parameter,
                 kind = kind,
                 summary = (kind == "trigger" ? "Set" : kind == "reset-trigger" ? "Reset" : "Set") + " Animator parameter '" + input.parameter + "'."

@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005 // Editor tool reflection scans currently loaded optional package types.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -247,7 +248,7 @@ namespace DucMinh.UnityMcp.Editor
         {
             var tilemapType = RequireType("UnityEngine.Tilemaps.Tilemap");
             var tileBaseType = RequireType("UnityEngine.Tilemaps.TileBase");
-            var target = EditorUtility.EntityIdToObject((EntityId)input.tilemapInstanceId);
+            var target = UnityMcpEditorObjectId.Resolve(input.tilemapInstanceId);
             if (target == null || !tilemapType.IsInstanceOfType(target)) throw new ArgumentException("tilemapInstanceId must identify a loaded Tilemap component.");
             var cells = input.cells ?? new List<TilemapCellWrite>();
             if (cells.Count == 0 || cells.Count > MaxTilemapCells) throw new ArgumentException("cells must contain between 1 and " + MaxTilemapCells + " entries.");

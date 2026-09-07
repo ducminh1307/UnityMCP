@@ -17,6 +17,19 @@ namespace DucMinh.UnityMcp.Tests
         }
     }
 
+    public sealed class ConsoleSeverityTests
+    {
+        [TestCase(1 << 11, "error")]
+        [TestCase(1 << 12, "warning")]
+        [TestCase(1 << 8, "error")]
+        [TestCase(1 << 9, "warning")]
+        [TestCase(1 << 2, "log")]
+        public void ConsoleRead_MapsUnityConsoleModeToExpectedSeverity(int mode, string expectedSeverity)
+        {
+            Assert.That(ConsoleReflection.ClassifySeverity(mode), Is.EqualTo(expectedSeverity));
+        }
+    }
+
     public sealed class RuntimeGameObjectSelectorTests
     {
         private GameObject first;
@@ -42,7 +55,7 @@ namespace DucMinh.UnityMcp.Tests
         {
             var exception = Assert.Throws<ArgumentException>(() => RuntimeCoreTools.GameObjectGet(new GameObjectGetInput
             {
-                instanceId = first.GetInstanceID(),
+                instanceId = UnityMcpObjectId.Get(first),
                 path = PathFor(second)
             }));
 
@@ -54,11 +67,11 @@ namespace DucMinh.UnityMcp.Tests
         {
             var output = RuntimeCoreTools.GameObjectGet(new GameObjectGetInput
             {
-                instanceId = first.GetInstanceID(),
+                instanceId = UnityMcpObjectId.Get(first),
                 path = PathFor(first)
             });
 
-            Assert.That(output.instanceId, Is.EqualTo(first.GetInstanceID()));
+            Assert.That(output.instanceId, Is.EqualTo(UnityMcpObjectId.Get(first)));
         }
 
         [Test]

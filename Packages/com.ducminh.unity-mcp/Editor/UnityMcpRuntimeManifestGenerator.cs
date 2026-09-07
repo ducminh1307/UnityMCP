@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005 // Editor manifest generation scans currently loaded assemblies.
 using System;
 using System.Collections.Generic;
 using System.IO;

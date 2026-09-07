@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005 // Editor tool reflection scans currently loaded Input System types.
 using System;
 using System.Collections;
 using System.Collections.Generic;

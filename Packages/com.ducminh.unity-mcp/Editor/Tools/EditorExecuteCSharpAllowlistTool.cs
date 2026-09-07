@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005 // Editor tool reflection scans currently loaded allowlisted types.
 using System;
 using System.Collections.Generic;
 using System.IO;

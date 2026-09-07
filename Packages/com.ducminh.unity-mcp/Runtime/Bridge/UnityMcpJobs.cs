@@ -1,3 +1,4 @@
+#pragma warning disable UAC0009 // DEVELOPMENT_BUILD intentionally gates the runtime MCP transport.
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
 using System;
 using System.Collections.Concurrent;

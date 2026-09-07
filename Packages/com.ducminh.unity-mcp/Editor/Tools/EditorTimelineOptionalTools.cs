@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005 // Editor tool reflection scans currently loaded Timeline types.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -101,7 +102,7 @@ namespace DucMinh.UnityMcp.Editor
                     created = false,
                     path = path,
                     name = name,
-                    directorInstanceId = existingDirector == null ? (int?)null : existingDirector.GetInstanceID(),
+                    directorInstanceId = existingDirector == null ? (int?)null : UnityMcpObjectId.Get(existingDirector),
                     directorCreated = target != null && existingDirector == null,
                     rollbackSupported = true,
                     journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "create-timeline", after = path } }
@@ -140,7 +141,7 @@ namespace DucMinh.UnityMcp.Editor
                 path = path,
                 name = name,
                 revision = FileRevision(fullPath),
-                directorInstanceId = director == null ? (int?)null : director.GetInstanceID(),
+                directorInstanceId = director == null ? (int?)null : UnityMcpObjectId.Get(director),
                 directorCreated = createdDirector,
                 rollbackSupported = true,
                 journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "create-timeline", after = path } }
@@ -205,8 +206,8 @@ namespace DucMinh.UnityMcp.Editor
                     revisionAfter = before,
                     trackKind = trackKind,
                     trackName = trackName,
-                    directorInstanceId = director == null ? (int?)null : director.GetInstanceID(),
-                    bindingObjectInstanceId = binding == null ? (int?)null : binding.GetInstanceID(),
+                    directorInstanceId = director == null ? (int?)null : UnityMcpObjectId.Get(director),
+                    bindingObjectInstanceId = binding == null ? (int?)null : UnityMcpObjectId.Get(binding),
                     rollbackSupported = true,
                     journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "add-timeline-track", after = path + "#" + trackName } }
                 };
@@ -238,9 +239,9 @@ namespace DucMinh.UnityMcp.Editor
                 revisionAfter = after,
                 trackKind = trackKind,
                 trackName = trackName,
-                trackInstanceId = track.GetInstanceID(),
-                directorInstanceId = director == null ? (int?)null : director.GetInstanceID(),
-                bindingObjectInstanceId = binding == null ? (int?)null : binding.GetInstanceID(),
+                trackInstanceId = UnityMcpObjectId.Get(track),
+                directorInstanceId = director == null ? (int?)null : UnityMcpObjectId.Get(director),
+                bindingObjectInstanceId = binding == null ? (int?)null : UnityMcpObjectId.Get(binding),
                 rollbackSupported = true,
                 journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "add-timeline-track", after = path + "#" + trackName } }
             };
@@ -310,7 +311,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private static GameObject RequireSceneGameObject(int instanceId, string inputName)
         {
-            var value = EditorUtility.EntityIdToObject((EntityId)instanceId);
+            var value = UnityMcpEditorObjectId.Resolve(instanceId);
             var gameObject = value as GameObject ?? (value as Component)?.gameObject;
             if (gameObject == null || !gameObject.scene.IsValid() || !gameObject.scene.isLoaded)
                 throw new ArgumentException(inputName + " must identify a GameObject or Component in a loaded scene.");
@@ -319,7 +320,7 @@ namespace DucMinh.UnityMcp.Editor
 
         private static UnityEngine.Object RequireSceneObject(int instanceId, string inputName)
         {
-            var value = EditorUtility.EntityIdToObject((EntityId)instanceId);
+            var value = UnityMcpEditorObjectId.Resolve(instanceId);
             var gameObject = value as GameObject ?? (value as Component)?.gameObject;
             if (value == null || gameObject == null || !gameObject.scene.IsValid() || !gameObject.scene.isLoaded)
                 throw new ArgumentException(inputName + " must identify a GameObject or Component in a loaded scene.");

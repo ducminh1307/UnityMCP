@@ -1,3 +1,4 @@
+#pragma warning disable UAC0005 // Editor tool reflection scans currently loaded scene asset types.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -121,14 +122,14 @@ namespace DucMinh.UnityMcp.Editor
             foreach (var root in scene.GetRootGameObjects())
             {
                 if (includeLifecycle && !rootNames.Add(root.name))
-                    AddIssue(output, limit, new SceneValidationIssue { kind = "duplicate-root-name", message = "Multiple root GameObjects share this name; verify duplicate bootstrap objects are intentional.", instanceId = root.GetInstanceID(), hierarchyPath = HierarchyPath(root) });
+                    AddIssue(output, limit, new SceneValidationIssue { kind = "duplicate-root-name", message = "Multiple root GameObjects share this name; verify duplicate bootstrap objects are intentional.", instanceId = UnityMcpObjectId.Get(root), hierarchyPath = HierarchyPath(root) });
                 foreach (var gameObject in Traverse(root))
                 {
                     if (!input.includeInactive && !gameObject.activeInHierarchy) continue;
                     output.objectsScanned++;
                     if (includeLifecycle && (gameObject.hideFlags & HideFlags.DontSave) != 0)
                     {
-                        AddIssue(output, limit, new SceneValidationIssue { kind = "dont-save-object", message = "GameObject has DontSave hide flags and can survive lifecycle transitions unexpectedly.", instanceId = gameObject.GetInstanceID(), hierarchyPath = HierarchyPath(gameObject) });
+                        AddIssue(output, limit, new SceneValidationIssue { kind = "dont-save-object", message = "GameObject has DontSave hide flags and can survive lifecycle transitions unexpectedly.", instanceId = UnityMcpObjectId.Get(gameObject), hierarchyPath = HierarchyPath(gameObject) });
                         if (output.truncated) return output;
                     }
                     var components = gameObject.GetComponents<Component>();
@@ -141,7 +142,7 @@ namespace DucMinh.UnityMcp.Editor
                             {
                                 kind = "missing-script",
                                 message = "A GameObject has a missing script component.",
-                                instanceId = gameObject.GetInstanceID(),
+                                instanceId = UnityMcpObjectId.Get(gameObject),
                                 hierarchyPath = HierarchyPath(gameObject),
                                 componentIndex = componentIndex
                             });
@@ -160,12 +161,16 @@ namespace DucMinh.UnityMcp.Editor
                             {
                                 enterChildren = false;
                                 if (property.propertyType != SerializedPropertyType.ObjectReference) continue;
+#if UNITY_6000_6_OR_NEWER
+                                if (property.objectReferenceValue != null || !property.objectReferenceEntityIdValue.IsValid()) continue;
+#else
                                 if (property.objectReferenceValue != null || property.objectReferenceInstanceIDValue == 0) continue;
+#endif
                                 AddIssue(output, limit, new SceneValidationIssue
                                 {
                                     kind = "broken-object-reference",
                                     message = "A serialized object reference is missing.",
-                                    instanceId = gameObject.GetInstanceID(),
+                                    instanceId = UnityMcpObjectId.Get(gameObject),
                                     hierarchyPath = HierarchyPath(gameObject),
                                     componentIndex = componentIndex,
                                     propertyPath = property.propertyPath
@@ -309,7 +314,7 @@ namespace DucMinh.UnityMcp.Editor
         {
             var root = RequirePrefabInstanceRoot(input.instanceId, input.hierarchyPath);
             if (!context.DryRun) PrefabUtility.RevertPrefabInstance(root, InteractionMode.AutomatedAction);
-            return Change(context, "Revert all prefab overrides on '" + HierarchyPath(root) + "'.", root.GetInstanceID());
+            return Change(context, "Revert all prefab overrides on '" + HierarchyPath(root) + "'.", UnityMcpObjectId.Get(root));
         }
 
         [UnityMcpTool("prefab-unpack", Description = "Unpack a prefab instance one level or completely; dry-run unless apply is true.", Category = "prefab", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Destructive, SupportsDryRun = true)]
@@ -318,7 +323,7 @@ namespace DucMinh.UnityMcp.Editor
             var root = RequirePrefabInstanceRoot(input.instanceId, input.hierarchyPath);
             var mode = input.completely ? PrefabUnpackMode.Completely : PrefabUnpackMode.OutermostRoot;
             if (!context.DryRun) PrefabUtility.UnpackPrefabInstance(root, mode, InteractionMode.AutomatedAction);
-            return Change(context, "Unpack prefab instance '" + HierarchyPath(root) + "' " + (input.completely ? "completely." : "one level."), root.GetInstanceID());
+            return Change(context, "Unpack prefab instance '" + HierarchyPath(root) + "' " + (input.completely ? "completely." : "one level."), UnityMcpObjectId.Get(root));
         }
 
         [UnityMcpTool("scriptableobject-create", Description = "Create an asset from a concrete ScriptableObject type; dry-run unless apply is true.", Category = "prefab", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -398,7 +403,7 @@ namespace DucMinh.UnityMcp.Editor
                 EditorUtility.SetDirty(asset);
                 AssetDatabase.SaveAssetIfDirty(asset);
             }
-            var result = Change(context, "Update " + updates.Count + " supported ScriptableObject field(s) on '" + path + "'.", asset.GetInstanceID());
+            var result = Change(context, "Update " + updates.Count + " supported ScriptableObject field(s) on '" + path + "'.", UnityMcpObjectId.Get(asset));
             result.rollbackSupported = !context.DryRun;
             foreach (var update in updates)
                 result.journal.Add(new ChangeJournalEntry { operation = "set-scriptableobject-field", before = update.field.Name, after = update.field.Name });
@@ -499,7 +504,7 @@ namespace DucMinh.UnityMcp.Editor
                 {
                     foreach (var candidate in Traverse(root))
                     {
-                        if (instanceId.HasValue && candidate.GetInstanceID() == instanceId.Value) return candidate;
+                        if (instanceId.HasValue && UnityMcpObjectId.Get(candidate) == instanceId.Value) return candidate;
                         if (!instanceId.HasValue && !string.IsNullOrWhiteSpace(hierarchyPath) && string.Equals(HierarchyPath(candidate), hierarchyPath, StringComparison.Ordinal)) return candidate;
                     }
                 }

@@ -47,7 +47,7 @@ namespace DucMinh.UnityMcp.Tests
             var system = target.AddComponent<ParticleSystem>();
             RuntimeExpansionTools.ParticleConfigure(new ParticleConfigureInput
             {
-                instanceId = target.GetInstanceID(),
+                instanceId = UnityMcpObjectId.Get(target),
                 componentIndex = 0,
                 rateOverTime = 12f,
                 emissionEnabled = true,
@@ -71,8 +71,8 @@ namespace DucMinh.UnityMcp.Tests
                 apply = true
             }, Context("particle-configure", false));
 
-            var output = RuntimeExpansionTools.ParticleGet(new ParticleSetInput { instanceId = target.GetInstanceID(), componentIndex = 0 });
-            Assert.That(output.instanceId, Is.EqualTo(system.GetInstanceID()));
+            var output = RuntimeExpansionTools.ParticleGet(new ParticleSetInput { instanceId = UnityMcpObjectId.Get(target), componentIndex = 0 });
+            Assert.That(output.instanceId, Is.EqualTo(UnityMcpObjectId.Get(system)));
             Assert.That(output.rateOverTime, Is.EqualTo(12f));
             Assert.That(output.shapeType, Is.EqualTo("Cone"));
             Assert.That(output.shapeRadius, Is.EqualTo(2f));

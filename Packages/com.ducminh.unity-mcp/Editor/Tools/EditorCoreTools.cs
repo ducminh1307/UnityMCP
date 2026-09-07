@@ -70,9 +70,9 @@ namespace DucMinh.UnityMcp.Editor
         [UnityMcpTool("editor-selection-get", Description = "Read the Editor selection.", Category = "editor", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead, DefaultEnabled = true)]
         public static EditorSelectionOutput EditorSelectionGet(EmptyInput input)
         {
-            var output = new EditorSelectionOutput { activeInstanceId = Selection.activeObject == null ? (int?)null : Selection.activeObject.GetInstanceID() };
+            var output = new EditorSelectionOutput { activeInstanceId = Selection.activeObject == null ? (int?)null : UnityMcpObjectId.Get(Selection.activeObject) };
             foreach (var value in Selection.objects.Where(v => v != null))
-                output.objects.Add(new SelectionItem { instanceId = value.GetInstanceID(), name = value.name, type = value.GetType().FullName, assetPath = AssetDatabase.GetAssetPath(value) });
+                output.objects.Add(new SelectionItem { instanceId = UnityMcpObjectId.Get(value), name = value.name, type = value.GetType().FullName, assetPath = AssetDatabase.GetAssetPath(value) });
             return output;
         }
 
@@ -95,12 +95,12 @@ namespace DucMinh.UnityMcp.Editor
         [UnityMcpTool("editor-selection-set", Description = "Set Editor selection; dry-run unless apply is true.", Category = "editor", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
         public static ChangeOutput EditorSelectionSet(EditorSelectionSetInput input, UnityMcpContext context)
         {
-            var objects = input.instanceIds.Select(id => EditorUtility.EntityIdToObject((EntityId)id)).Where(v => v != null).ToArray();
+            var objects = input.instanceIds.Select(UnityMcpEditorObjectId.Resolve).Where(v => v != null).ToArray();
             if (objects.Length != input.instanceIds.Count) throw new ArgumentException("One or more instance IDs were not found.");
             if (!context.DryRun)
             {
                 Selection.objects = objects;
-                if (input.activeInstanceId.HasValue) Selection.activeObject = EditorUtility.EntityIdToObject((EntityId)input.activeInstanceId.Value);
+                if (input.activeInstanceId.HasValue) Selection.activeObject = UnityMcpEditorObjectId.Resolve(input.activeInstanceId.Value);
             }
             return Change(context, $"Select {objects.Length} object(s).");
         }
@@ -226,7 +226,7 @@ namespace DucMinh.UnityMcp.Editor
             Undo.RegisterCreatedObjectUndo(created, "UnityMCP Instantiate Prefab");
             if (parent != null) Undo.SetTransformParent(created.transform, parent.transform, "UnityMCP Set Prefab Parent");
             if (input.position.HasValue) created.transform.position = input.position.Value;
-            return Change(context, $"Instantiated prefab '{input.path}'.", created.GetInstanceID());
+            return Change(context, $"Instantiated prefab '{input.path}'.", UnityMcpObjectId.Get(created));
         }
 
         [UnityMcpTool("particle-prefab-save", Description = "Save a scene ParticleSystem GameObject as a prefab asset; dry-run unless apply is true.", Category = "vfx", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -238,11 +238,11 @@ namespace DucMinh.UnityMcp.Editor
             if (input.componentIndex < 0 || input.componentIndex >= systems.Length) throw new ArgumentOutOfRangeException(nameof(input.componentIndex));
             if (AssetDatabase.LoadAssetAtPath<GameObject>(input.assetPath) != null && !input.overwrite)
                 throw new InvalidOperationException("A prefab already exists at assetPath. Set overwrite to true to replace it.");
-            if (context.DryRun) return Change(context, $"Save ParticleSystem '{target.name}' as prefab '{input.assetPath}'.", systems[input.componentIndex].GetInstanceID());
+            if (context.DryRun) return Change(context, $"Save ParticleSystem '{target.name}' as prefab '{input.assetPath}'.", UnityMcpObjectId.Get(systems[input.componentIndex]));
             var prefab = PrefabUtility.SaveAsPrefabAssetAndConnect(target, input.assetPath, InteractionMode.AutomatedAction);
             if (prefab == null) throw new InvalidOperationException("Unity could not save the ParticleSystem prefab.");
             AssetDatabase.SaveAssets();
-            return Change(context, $"Saved ParticleSystem prefab '{input.assetPath}'.", prefab.GetInstanceID());
+            return Change(context, $"Saved ParticleSystem prefab '{input.assetPath}'.", UnityMcpObjectId.Get(prefab));
         }
 
         [UnityMcpTool("material-info", Description = "Read material and shader properties.", Category = "material", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead, DefaultEnabled = true)]
@@ -381,7 +381,7 @@ namespace DucMinh.UnityMcp.Editor
         private static GameObject FindGameObject(int? instanceId, string path)
         {
             var selected = RuntimeCoreTools.GameObjectGet(new GameObjectGetInput { instanceId = instanceId, path = path });
-            var value = EditorUtility.EntityIdToObject((EntityId)selected.instanceId) as GameObject;
+            var value = UnityMcpEditorObjectId.Resolve(selected.instanceId) as GameObject;
             if (value == null || !value.scene.IsValid()) throw new ArgumentException("GameObject was not found.");
             return value;
         }
@@ -557,7 +557,7 @@ public static class {input.className}
                     var entry = Activator.CreateInstance(logEntry);
                     get?.Invoke(null, new[] { (object)index, entry });
                     var mode = Convert.ToInt32(Field(logEntry, entry, "mode") ?? 0);
-                    var severity = (mode & (1 << 0 | 1 << 1 | 1 << 4 | 1 << 6 | 1 << 7 | 1 << 8 | 1 << 9)) != 0 ? "error" : (mode & (1 << 2 | 1 << 3 | 1 << 5)) != 0 ? "warning" : "log";
+                    var severity = ClassifySeverity(mode);
                     var message = Convert.ToString(Field(logEntry, entry, "condition"));
                     if (!string.IsNullOrEmpty(input.severity) && !string.Equals(input.severity, severity, StringComparison.OrdinalIgnoreCase)) continue;
                     if (!string.IsNullOrEmpty(input.contains) && (message == null || message.IndexOf(input.contains, StringComparison.OrdinalIgnoreCase) < 0)) continue;
@@ -573,6 +573,31 @@ public static class {input.className}
             }
             output.nextCursor = count - 1;
             return output;
+        }
+
+        // Keep these masks aligned with UnityEditor.LogMessageFlags / ConsoleWindow.Mode.
+        // The Console UI treats compile diagnostics separately from Debug log calls.
+        internal static string ClassifySeverity(int mode)
+        {
+            const int errorMask =
+                1 << 0 |  // Error
+                1 << 1 |  // Assert
+                1 << 4 |  // Fatal
+                1 << 6 |  // AssetImportError
+                1 << 8 |  // ScriptingError
+                1 << 11 | // ScriptCompileError
+                1 << 17 | // ScriptingException
+                1 << 20 | // GraphCompileError
+                1 << 21 | // ScriptingAssertion
+                1 << 22;  // VisualScriptingError
+            const int warningMask =
+                1 << 7 |  // AssetImportWarning
+                1 << 9 |  // ScriptingWarning
+                1 << 12;  // ScriptCompileWarning
+
+            if ((mode & errorMask) != 0) return "error";
+            if ((mode & warningMask) != 0) return "warning";
+            return "log";
         }
 
         private static object Field(Type type, object value, string name) => type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetValue(value);

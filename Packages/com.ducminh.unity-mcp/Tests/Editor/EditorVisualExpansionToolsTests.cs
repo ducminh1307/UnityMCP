@@ -27,7 +27,7 @@ namespace DucMinh.UnityMcp.Tests
         {
             var expected = cameraObject.GetComponent<Camera>();
 
-            var actual = EditorVisualExpansionTools.ResolveLoadedCamera(expected.GetInstanceID(), "invalid camera");
+            var actual = EditorVisualExpansionTools.ResolveLoadedCamera(UnityMcpObjectId.Get(expected), "invalid camera");
 
             Assert.That(actual, Is.SameAs(expected));
         }
@@ -37,7 +37,7 @@ namespace DucMinh.UnityMcp.Tests
         {
             var expected = cameraObject.GetComponent<Camera>();
 
-            var actual = EditorVisualExpansionTools.ResolveLoadedCamera(cameraObject.GetInstanceID(), "invalid camera");
+            var actual = EditorVisualExpansionTools.ResolveLoadedCamera(UnityMcpObjectId.Get(cameraObject), "invalid camera");
 
             Assert.That(actual, Is.SameAs(expected));
         }
@@ -48,7 +48,7 @@ namespace DucMinh.UnityMcp.Tests
             UnityEngine.Object.DestroyImmediate(cameraObject.GetComponent<Camera>());
 
             var exception = Assert.Throws<ArgumentException>(() =>
-                EditorVisualExpansionTools.ResolveLoadedCamera(cameraObject.GetInstanceID(), "invalid camera"));
+                EditorVisualExpansionTools.ResolveLoadedCamera(UnityMcpObjectId.Get(cameraObject), "invalid camera"));
 
             Assert.That(exception.Message, Is.EqualTo("invalid camera"));
         }
@@ -77,7 +77,7 @@ namespace DucMinh.UnityMcp.Tests
         {
             var exception = Assert.Throws<ArgumentException>(() => EditorVisualExpansionTools.ScreenshotCamera(new ScreenshotCameraInput
             {
-                instanceId = cameraObject.GetInstanceID(),
+                instanceId = UnityMcpObjectId.Get(cameraObject),
                 width = 2048,
                 height = 2048
             }));
