@@ -1,8 +1,8 @@
 {
   "catalogVersion": "1.0.0",
   "schemaRevision": 2,
-  "expectedToolCount": 194,
-  "implementedTargetCount": 192,
+  "expectedToolCount": 195,
+  "implementedTargetCount": 193,
   "statusSemantics": {
     "implemented": "A compiled Unity handler exists. It is advertised only when the target scope, optional package requirements, and the local per-user enablement policy all permit it.",
     "planned": "The contract has no supported Unity handler in this release and must never be advertised by MCP."
@@ -12,7 +12,7 @@
     {"id":"scene-gameobject","title":"Scene & GameObject","declaredCount":16},
     {"id":"components-reflection","title":"Components & Reflection","declaredCount":12},
     {"id":"assets-importers","title":"Assets & Importers","declaredCount":12},
-    {"id":"prefab-scriptableobject","title":"Prefab & ScriptableObject","declaredCount":9},
+    {"id":"prefab-scriptableobject","title":"Prefab & ScriptableObject","declaredCount":10},
     {"id":"scripts-compilation","title":"Scripts & Compilation","declaredCount":10},
     {"id":"console-tests","title":"Console & Tests","declaredCount":7},
     {"id":"packages-build","title":"Packages & Build","declaredCount":12},
@@ -88,6 +88,7 @@
     {"name":"asset-import-settings-set","category":"assets-importers","status":"implemented","scope":["editor"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Dry-run or update validated importer settings and reimport."},
 
     {"name":"prefab-info","category":"prefab-scriptableobject","status":"implemented","scope":["editor"],"safety":"safe-read","defaultEnabled":true,"schemaRevision":1,"dependency":"unity-editor","summary":"Read prefab type, source, overrides, and hierarchy metadata."},
+    {"name":"prefab-edit","category":"prefab-scriptableobject","status":"implemented","scope":["editor"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Dry-run or edit a prefab asset root or child GameObject, serialized component fields, and public component properties."},
     {"name":"prefab-create","category":"prefab-scriptableobject","status":"implemented","scope":["editor"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Dry-run or create a prefab asset from a scene object."},
     {"name":"prefab-instantiate","category":"prefab-scriptableobject","status":"implemented","scope":["editor"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Dry-run or instantiate a prefab in an Editor scene."},
     {"name":"prefab-apply","category":"prefab-scriptableobject","status":"implemented","scope":["editor"],"safety":"write","defaultEnabled":false,"schemaRevision":1,"dependency":"unity-editor","summary":"Dry-run or apply selected instance overrides to a prefab asset."},

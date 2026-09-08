@@ -556,13 +556,15 @@ public static class {input.className}
                 {
                     var entry = Activator.CreateInstance(logEntry);
                     get?.Invoke(null, new[] { (object)index, entry });
-                    var mode = Convert.ToInt32(Field(logEntry, entry, "mode") ?? 0);
+                    var mode = Convert.ToInt32(Member(logEntry, entry, "mode") ?? 0);
                     var severity = ClassifySeverity(mode);
-                    var message = Convert.ToString(Field(logEntry, entry, "condition"));
+                    // Unity has changed these internal member names between Editor versions.
+                    // Preserve the older `condition` path while accepting Unity 6.6's `message`.
+                    var message = Text(logEntry, entry, "condition", "message");
                     if (!string.IsNullOrEmpty(input.severity) && !string.Equals(input.severity, severity, StringComparison.OrdinalIgnoreCase)) continue;
                     if (!string.IsNullOrEmpty(input.contains) && (message == null || message.IndexOf(input.contains, StringComparison.OrdinalIgnoreCase) < 0)) continue;
                     if (output.entries.Count >= limit) { output.truncated = true; break; }
-                    output.entries.Add(new ConsoleEntryInfo { cursor = index, observedUtc = observedUtc, message = message, stackTrace = Convert.ToString(Field(logEntry, entry, "stackTrace")), file = Convert.ToString(Field(logEntry, entry, "file")), line = Convert.ToInt32(Field(logEntry, entry, "line") ?? 0), severity = severity });
+                    output.entries.Add(new ConsoleEntryInfo { cursor = index, observedUtc = observedUtc, message = message, stackTrace = Text(logEntry, entry, "stackTrace", "stacktrace"), file = Text(logEntry, entry, "file"), line = Convert.ToInt32(Member(logEntry, entry, "line") ?? 0), severity = severity });
                 }
             }
             finally { end?.Invoke(null, null); }
@@ -600,6 +602,23 @@ public static class {input.className}
             return "log";
         }
 
-        private static object Field(Type type, object value, string name) => type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetValue(value);
+        internal static string Text(Type type, object value, params string[] names)
+        {
+            foreach (var name in names)
+            {
+                var text = Convert.ToString(Member(type, value, name));
+                if (!string.IsNullOrEmpty(text)) return text;
+            }
+
+            return string.Empty;
+        }
+
+        private static object Member(Type type, object value, string name)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var field = type.GetField(name, flags);
+            if (field != null) return field.GetValue(value);
+            return type.GetProperty(name, flags)?.GetValue(value, null);
+        }
     }
 }

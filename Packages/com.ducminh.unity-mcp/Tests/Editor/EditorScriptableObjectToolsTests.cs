@@ -120,4 +120,97 @@ namespace DucMinh.UnityMcp.Tests
             return (UnityMcpContext)constructor.Invoke(new object[] { toolName, dryRun, CancellationToken.None });
         }
     }
+
+    public sealed class EditorPrefabEditToolsTests
+    {
+        private const string TestFolder = "Assets/UnityMcpPrefabEditToolTests";
+        private const string AssetPath = TestFolder + "/Card.prefab";
+
+        [SetUp]
+        public void SetUp()
+        {
+            AssetDatabase.DeleteAsset(TestFolder);
+            AssetDatabase.CreateFolder("Assets", "UnityMcpPrefabEditToolTests");
+            var root = new GameObject("Card", typeof(RectTransform));
+            var item = new GameObject("Item", typeof(RectTransform), typeof(CanvasGroup));
+            item.transform.SetParent(root.transform, false);
+            PrefabUtility.SaveAsPrefabAsset(root, AssetPath);
+            Object.DestroyImmediate(root);
+        }
+
+        [TearDown]
+        public void TearDown() => AssetDatabase.DeleteAsset(TestFolder);
+
+        [Test]
+        public void Edit_UpdatesChildRectTransformAndComponentProperty()
+        {
+            var output = EditorSceneAssetExpansionTools.PrefabEdit(new PrefabEditInput
+            {
+                path = AssetPath,
+                childPath = "Item",
+                name = "RewardItem",
+                componentType = typeof(RectTransform).FullName,
+                values = new System.Collections.Generic.List<ComponentPropertyWrite>
+                {
+                    new ComponentPropertyWrite { property = "sizeDelta", valueJson = "{\"x\":160.0,\"y\":72.0}" }
+                }
+            }, Context("prefab-edit", false));
+
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(AssetPath);
+            var item = prefab.transform.Find("RewardItem");
+            Assert.That(output.changed, Is.True);
+            Assert.That(item, Is.Not.Null);
+            Assert.That(item.GetComponent<RectTransform>().sizeDelta, Is.EqualTo(new Vector2(160f, 72f)));
+        }
+
+        [Test]
+        public void Edit_DryRun_DoesNotPersistComponentChange()
+        {
+            var output = EditorSceneAssetExpansionTools.PrefabEdit(new PrefabEditInput
+            {
+                path = AssetPath,
+                childPath = "Item",
+                componentType = typeof(CanvasGroup).FullName,
+                values = new System.Collections.Generic.List<ComponentPropertyWrite>
+                {
+                    new ComponentPropertyWrite { property = "alpha", valueJson = "0.25" }
+                }
+            }, Context("prefab-edit", true));
+
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(AssetPath);
+            Assert.That(output.dryRun, Is.True);
+            Assert.That(prefab.transform.Find("Item").GetComponent<CanvasGroup>().alpha, Is.EqualTo(1f));
+        }
+
+        [Test]
+        public void Edit_RejectsAmbiguousChildPath()
+        {
+            var root = PrefabUtility.LoadPrefabContents(AssetPath);
+            try
+            {
+                new GameObject("Item", typeof(RectTransform)).transform.SetParent(root.transform, false);
+                PrefabUtility.SaveAsPrefabAsset(root, AssetPath);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(root); }
+
+            var exception = Assert.Throws<System.ArgumentException>(() => EditorSceneAssetExpansionTools.PrefabEdit(new PrefabEditInput
+            {
+                path = AssetPath,
+                childPath = "Item",
+                name = "Changed"
+            }, Context("prefab-edit", true)));
+
+            Assert.That(exception.Message, Does.Contain("ambiguous"));
+        }
+
+        private static UnityMcpContext Context(string toolName, bool dryRun)
+        {
+            var constructor = typeof(UnityMcpContext).GetConstructor(
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                null,
+                new[] { typeof(string), typeof(bool), typeof(CancellationToken) },
+                null);
+            return (UnityMcpContext)constructor.Invoke(new object[] { toolName, dryRun, CancellationToken.None });
+        }
+    }
 }

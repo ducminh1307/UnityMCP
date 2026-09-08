@@ -39,6 +39,22 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class PrefabCreateInput { public int? instanceId; public string hierarchyPath; public string destination; public bool apply; }
     [Serializable] public sealed class PrefabInstanceInput { public int? instanceId; public string hierarchyPath; public bool apply; }
     [Serializable] public sealed class PrefabUnpackInput { public int? instanceId; public string hierarchyPath; public bool completely = true; public bool apply; }
+    [Serializable] public sealed class PrefabEditInput
+    {
+        public string path;
+        public string childPath;
+        public string name;
+        public bool? active;
+        public int? layer;
+        public string tag;
+        public Vector3? localPosition;
+        public Vector3? localEulerAngles;
+        public Vector3? localScale;
+        public string componentType;
+        public int componentIndex;
+        public List<ComponentPropertyWrite> values = new List<ComponentPropertyWrite>();
+        public bool apply;
+    }
     [Serializable] public sealed class ScriptableObjectCreateInput { public string type; public string path; public bool apply; }
     [Serializable] public sealed class ScriptableObjectCreateOutput { public bool dryRun; public bool created; public string path; public string type; public string guid; public bool rollbackSupported; public List<ChangeJournalEntry> journal = new List<ChangeJournalEntry>(); }
     [Serializable] public sealed class ScriptableObjectGetInput { public string path; }
@@ -309,6 +325,59 @@ namespace DucMinh.UnityMcp.Editor
             return AssetChange(context, "Apply all overrides from '" + HierarchyPath(root) + "' to '" + sourcePath + "'.", "apply-prefab", HierarchyPath(root), sourcePath);
         }
 
+        [UnityMcpTool("prefab-edit", Description = "Edit a prefab asset root or child GameObject, serialized component fields, and public component properties; dry-run unless apply is true.", Category = "prefab", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
+        public static ChangeOutput PrefabEdit(PrefabEditInput input, UnityMcpContext context)
+        {
+            var prefabPath = NormalizeAssetPath(input.path, ".prefab");
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) == null) throw new ArgumentException("Path is not a prefab asset.");
+            if (input.layer.HasValue && (input.layer.Value < 0 || input.layer.Value > 31)) throw new ArgumentOutOfRangeException(nameof(input.layer));
+            var changesGameObject = input.name != null || input.active.HasValue || input.layer.HasValue || input.tag != null ||
+                input.localPosition.HasValue || input.localEulerAngles.HasValue || input.localScale.HasValue;
+            var changesComponent = input.values != null && input.values.Count > 0;
+            if (!changesGameObject && !changesComponent) throw new ArgumentException("Specify at least one GameObject, Transform, or component property change.");
+            if (changesComponent && string.IsNullOrWhiteSpace(input.componentType)) throw new ArgumentException("componentType is required when values are specified.");
+            if (!changesComponent && !string.IsNullOrWhiteSpace(input.componentType)) throw new ArgumentException("componentType requires at least one component property value.");
+
+            var root = PrefabUtility.LoadPrefabContents(prefabPath);
+            try
+            {
+                var target = FindPrefabChild(root, input.childPath);
+                Component component = null;
+                List<PrefabComponentWrite> writes = null;
+                if (changesComponent)
+                {
+                    var components = target.GetComponents<Component>().Where(candidate => candidate != null &&
+                        (candidate.GetType().FullName == input.componentType || candidate.GetType().Name == input.componentType)).ToArray();
+                    if (components.Length == 0) throw new ArgumentException("The requested component type was not found on the prefab child.");
+                    if (input.componentIndex < 0 || input.componentIndex >= components.Length) throw new ArgumentOutOfRangeException(nameof(input.componentIndex));
+                    component = components[input.componentIndex];
+                    writes = input.values.Select(value => ResolvePrefabComponentWrite(component, value)).ToList();
+                }
+
+                if (!context.DryRun)
+                {
+                    if (input.name != null) target.name = input.name;
+                    if (input.active.HasValue) target.SetActive(input.active.Value);
+                    if (input.layer.HasValue) target.layer = input.layer.Value;
+                    if (input.tag != null) target.tag = input.tag;
+                    if (input.localPosition.HasValue) target.transform.localPosition = input.localPosition.Value;
+                    if (input.localEulerAngles.HasValue) target.transform.localEulerAngles = input.localEulerAngles.Value;
+                    if (input.localScale.HasValue) target.transform.localScale = input.localScale.Value;
+                    if (writes != null) foreach (var write in writes) write.Apply(component);
+                    EditorUtility.SetDirty(target);
+                    if (component != null) EditorUtility.SetDirty(component);
+                    PrefabUtility.SaveAsPrefabAsset(root, prefabPath);
+                    AssetDatabase.SaveAssets();
+                }
+                var targetPath = string.IsNullOrEmpty(input.childPath) ? "<root>" : input.childPath;
+                return AssetChange(context, "Edit prefab '" + prefabPath + "' at '" + targetPath + "'.", "edit-prefab", prefabPath, prefabPath);
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
         [UnityMcpTool("prefab-revert", Description = "Revert all overrides on a prefab instance; dry-run unless apply is true.", Category = "prefab", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Destructive, SupportsDryRun = true)]
         public static ChangeOutput PrefabRevert(PrefabInstanceInput input, UnityMcpContext context)
         {
@@ -525,6 +594,42 @@ namespace DucMinh.UnityMcp.Editor
         {
             var source = PrefabUtility.GetCorrespondingObjectFromSource(root);
             return source == null ? null : AssetDatabase.GetAssetPath(source);
+        }
+
+        private sealed class PrefabComponentWrite
+        {
+            private readonly FieldInfo field;
+            private readonly PropertyInfo property;
+            private readonly object value;
+            public PrefabComponentWrite(FieldInfo field, PropertyInfo property, object value) { this.field = field; this.property = property; this.value = value; }
+            public void Apply(Component component) { if (field != null) field.SetValue(component, value); else property.SetValue(component, value, null); }
+        }
+
+        private static PrefabComponentWrite ResolvePrefabComponentWrite(Component component, ComponentPropertyWrite write)
+        {
+            if (write == null || string.IsNullOrWhiteSpace(write.property)) throw new ArgumentException("Each value needs a property name.");
+            var field = component.GetType().GetField(write.property, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var property = component.GetType().GetProperty(write.property, BindingFlags.Instance | BindingFlags.Public);
+            if (field != null && (field.IsInitOnly || field.IsNotSerialized || (!field.IsPublic && !field.IsDefined(typeof(SerializeField), true)))) field = null;
+            if (property != null && (!property.CanWrite || property.GetIndexParameters().Length != 0)) property = null;
+            var valueType = field != null ? field.FieldType : property != null ? property.PropertyType : null;
+            if (valueType == null) throw new ArgumentException("No writable serialized field/public property named '" + write.property + "' was found.");
+            return new PrefabComponentWrite(field, property, RuntimeExpansionTools.DeserializeComponentValue(write.valueJson, valueType));
+        }
+
+        private static GameObject FindPrefabChild(GameObject root, string childPath)
+        {
+            if (string.IsNullOrWhiteSpace(childPath) || childPath == ".") return root;
+            var current = root.transform;
+            foreach (var segment in childPath.Split('/'))
+            {
+                if (string.IsNullOrWhiteSpace(segment) || segment == "." || segment == "..") throw new ArgumentException("childPath must be a relative hierarchy path without '.', '..', or empty segments.");
+                var matches = Enumerable.Range(0, current.childCount).Select(current.GetChild).Where(child => child.name == segment).ToArray();
+                if (matches.Length == 0) throw new ArgumentException("Prefab child path was not found: " + childPath);
+                if (matches.Length > 1) throw new ArgumentException("Prefab child path is ambiguous: " + childPath);
+                current = matches[0];
+            }
+            return current.gameObject;
         }
 
         private static string RequireExistingProjectFile(string path)

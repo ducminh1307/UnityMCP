@@ -439,9 +439,14 @@ namespace DucMinh.UnityMcp
             if (property != null && (!property.CanWrite || property.GetIndexParameters().Length != 0)) property = null;
             var valueType = field != null ? field.FieldType : property != null ? property.PropertyType : null;
             if (valueType == null) throw new ArgumentException("No writable public field/property named '" + write.property + "' was found.");
-            var serializer = JsonSerializer.CreateDefault(new JsonSerializerSettings { Converters = new List<JsonConverter> { UnityMcpValueJsonConverter.Instance, new StringEnumConverter() } });
-            var value = JToken.Parse(write.valueJson ?? "null").ToObject(valueType, serializer);
+            var value = DeserializeComponentValue(write.valueJson, valueType);
             return new ResolvedComponentWrite(field, property, value);
+        }
+
+        public static object DeserializeComponentValue(string valueJson, Type valueType)
+        {
+            var serializer = JsonSerializer.CreateDefault(new JsonSerializerSettings { Converters = new List<JsonConverter> { UnityMcpValueJsonConverter.Instance, new StringEnumConverter() } });
+            return JToken.Parse(valueJson ?? "null").ToObject(valueType, serializer);
         }
 
         private static Type RequireType(string typeName)

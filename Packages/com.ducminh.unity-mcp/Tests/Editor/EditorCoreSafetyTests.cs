@@ -19,6 +19,10 @@ namespace DucMinh.UnityMcp.Tests
 
     public sealed class ConsoleSeverityTests
     {
+        private sealed class LegacyLogEntry { public string condition = "legacy message"; }
+        private sealed class Unity66LogEntry { public string message = "Unity 6.6 message"; }
+        private sealed class PropertyLogEntry { public string message { get { return "property message"; } } }
+
         [TestCase(1 << 11, "error")]
         [TestCase(1 << 12, "warning")]
         [TestCase(1 << 8, "error")]
@@ -27,6 +31,24 @@ namespace DucMinh.UnityMcp.Tests
         public void ConsoleRead_MapsUnityConsoleModeToExpectedSeverity(int mode, string expectedSeverity)
         {
             Assert.That(ConsoleReflection.ClassifySeverity(mode), Is.EqualTo(expectedSeverity));
+        }
+
+        [Test]
+        public void ConsoleRead_ReadsLegacyCondition()
+        {
+            Assert.That(ConsoleReflection.Text(typeof(LegacyLogEntry), new LegacyLogEntry(), "condition", "message"), Is.EqualTo("legacy message"));
+        }
+
+        [Test]
+        public void ConsoleRead_FallsBackToUnity66Message()
+        {
+            Assert.That(ConsoleReflection.Text(typeof(Unity66LogEntry), new Unity66LogEntry(), "condition", "message"), Is.EqualTo("Unity 6.6 message"));
+        }
+
+        [Test]
+        public void ConsoleRead_ReadsMessageProperty()
+        {
+            Assert.That(ConsoleReflection.Text(typeof(PropertyLogEntry), new PropertyLogEntry(), "message"), Is.EqualTo("property message"));
         }
     }
 

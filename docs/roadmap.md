@@ -1,7 +1,7 @@
 # Roadmap and acceptance gates
 
-The canonical inventory is [tool-catalog.json](tool-catalog.json). Its 187 unique
-IDs are grouped into 20 categories whose declared counts sum to 187. The catalog's
+The canonical inventory is [tool-catalog.json](tool-catalog.json). Its 195 unique
+IDs are grouped into 20 categories whose declared counts sum to 195. The catalog's
 implemented set is derived from the compiled C# registrations; 20 built-in
 safe-read tools are default-enabled. `python tools/validate_catalog.py` locks the
 catalog to the source-derived set and fails on count drift, duplicates, invalid

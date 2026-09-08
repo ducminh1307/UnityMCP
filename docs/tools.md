@@ -15,8 +15,8 @@ duplicating schemas that Unity generates at runtime.
 
 ## At a glance
 
-- **194** cataloged tools in **20** categories.
-- **192** implemented tools and **2** planned tools.
+- **195** cataloged tools in **20** categories.
+- **193** implemented tools and **2** planned tools.
 - **20** safe-read tools enabled in a fresh project.
 - Catalog version: 1.0.0.
 
@@ -59,7 +59,7 @@ appear in this built-in catalog; use `custom-tool-list` to inspect them.
 - [Scene & GameObject](#scene-gameobject) (16)
 - [Components & Reflection](#components-reflection) (12)
 - [Assets & Importers](#assets-importers) (12)
-- [Prefab & ScriptableObject](#prefab-scriptableobject) (9)
+- [Prefab & ScriptableObject](#prefab-scriptableobject) (10)
 - [Scripts & Compilation](#scripts-compilation) (10)
 - [Console & Tests](#console-tests) (7)
 - [Packages & Build](#packages-build) (12)
@@ -169,11 +169,12 @@ appear in this built-in catalog; use `custom-tool-list` to inspect them.
 
 ## Prefab & ScriptableObject
 
-9 tools.
+10 tools.
 
 | Tool | Status | Scope | Safety | Default | Dependency | Description |
 |---|---|---|---|---|---|---|
 | `prefab-info` | implemented | editor | safe-read | Yes | `unity-editor` | Read prefab type, source, overrides, and hierarchy metadata. |
+| `prefab-edit` | implemented | editor | write | No | `unity-editor` | Dry-run or edit a prefab asset root or child GameObject, serialized component fields, and public component properties. |
 | `prefab-create` | implemented | editor | write | No | `unity-editor` | Dry-run or create a prefab asset from a scene object. |
 | `prefab-instantiate` | implemented | editor | write | No | `unity-editor` | Dry-run or instantiate a prefab in an Editor scene. |
 | `prefab-apply` | implemented | editor | write | No | `unity-editor` | Dry-run or apply selected instance overrides to a prefab asset. |
