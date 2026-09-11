@@ -574,10 +574,10 @@ Poll long-running task status, progress, and results:
 | Tool | Status | Scope | Safety | Default | Dependency | Description |
 |---|---|---|---|---|---|---|
 | `screenshot-game-view` | implemented | runtime | safe-read | No | `unity-core` | Capture a bounded Game view or Development Player screenshot. |
-| `screenshot-scene-view` | implemented | editor | safe-read | No | `unity-editor` | Capture the active Scene view with optional gizmos. |
-| `screenshot-camera` | implemented | editor | safe-read | No | `unity-core` | Render one camera into a bounded image. |
+| `screenshot-scene-view` | implemented | editor | safe-read | No | `unity-editor` | Capture the active Scene view at the current Game view size unless dimensions are specified. |
+| `screenshot-camera` | implemented | editor | safe-read | No | `unity-core` | Render one camera as an sRGB PNG at the current Game view size unless dimensions are specified. |
 | `screenshot-gameobject` | implemented | editor | safe-read | No | `unity-core` | Frame and capture a target GameObject using a temporary camera. |
-| `screenshot-multiview` | implemented | editor | safe-read | No | `unity-core` | Capture a bounded set of named views in one request. |
+| `screenshot-multiview` | implemented | editor | safe-read | No | `unity-core` | Capture cameras as sRGB PNGs at the current Game view size unless dimensions are specified. |
 
 <a id="profiler-diagnostics"></a>
 

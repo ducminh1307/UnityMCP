@@ -21,8 +21,8 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class RenderPipelineInfoOutput { public string currentPipeline; public string defaultPipeline; public string qualityPipeline; public string colorSpace; public int qualityLevel; }
     [Serializable] public sealed class RenderSettingsOutput { public bool fog; public Color fogColor; public float fogDensity; public string fogMode; public string ambientMode; public Color ambientSkyColor; public Color ambientEquatorColor; public Color ambientGroundColor; public float ambientIntensity; public float reflectionIntensity; }
     [Serializable] public sealed class RenderSettingsInput { public bool? fog; public Color? fogColor; public float? fogDensity; public string fogMode; public string ambientMode; public Color? ambientSkyColor; public Color? ambientEquatorColor; public Color? ambientGroundColor; public float? ambientIntensity; public float? reflectionIntensity; public bool apply; }
-    [Serializable] public sealed class ScreenshotCameraInput { public int? instanceId; public int width = 1280; public int height = 720; public bool includeAlpha; }
-    [Serializable] public sealed class ScreenshotMultiViewInput { public List<int> cameraInstanceIds = new List<int>(); public int width = 960; public int height = 540; public bool includeAlpha; }
+    [Serializable] public sealed class ScreenshotCameraInput { public int? instanceId; public int? width; public int? height; public bool includeAlpha; }
+    [Serializable] public sealed class ScreenshotMultiViewInput { public List<int> cameraInstanceIds = new List<int>(); public int? width; public int? height; public bool includeAlpha; }
     [Serializable] public sealed class ScreenshotInfo { public int cameraInstanceId; public string cameraName; public int width; public int height; }
     [Serializable] public sealed class ScreenshotMultiViewOutput { public List<ScreenshotInfo> screenshots = new List<ScreenshotInfo>(); }
 
@@ -199,13 +199,14 @@ namespace DucMinh.UnityMcp.Editor
             return Change(context, "Updated active-scene render settings.");
         }
 
-        [UnityMcpTool("screenshot-camera", Description = "Capture a loaded Camera as a PNG image using the Camera component or its GameObject instance ID.", Category = "visual", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
+        [UnityMcpTool("screenshot-camera", Description = "Capture a loaded Camera as an sRGB PNG image using the Camera component or its GameObject instance ID.", Category = "visual", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
         public static UnityMcpResult ScreenshotCamera(ScreenshotCameraInput input)
         {
             if (!input.instanceId.HasValue) throw new ArgumentException("instanceId is required.");
-            ValidateScreenshotCaptureBudget(1, input.width, input.height);
+            var size = ResolveScreenshotSize(input.width, input.height);
+            ValidateScreenshotCaptureBudget(1, size.x, size.y);
             var camera = ResolveLoadedCamera(input.instanceId.Value, "instanceId must identify a loaded Camera component or a loaded scene GameObject with a Camera component.");
-            return CaptureCamera(camera, input.width, input.height, input.includeAlpha, out _);
+            return CaptureCamera(camera, size.x, size.y, input.includeAlpha, out _);
         }
 
         [UnityMcpTool("screenshot-scene-view", Description = "Capture the last active Scene View camera as a PNG image.", Category = "visual", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
@@ -213,8 +214,9 @@ namespace DucMinh.UnityMcp.Editor
         {
             var sceneView = SceneView.lastActiveSceneView;
             if (sceneView == null || sceneView.camera == null) throw new InvalidOperationException("Open a Scene View before capturing it.");
-            ValidateScreenshotCaptureBudget(1, input.width, input.height);
-            return CaptureCamera(sceneView.camera, input.width, input.height, input.includeAlpha, out _);
+            var size = ResolveScreenshotSize(input.width, input.height);
+            ValidateScreenshotCaptureBudget(1, size.x, size.y);
+            return CaptureCamera(sceneView.camera, size.x, size.y, input.includeAlpha, out _);
         }
 
         [UnityMcpTool("screenshot-multiview", Description = "Capture several loaded Cameras as PNG images.", Category = "visual", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead)]
@@ -222,13 +224,14 @@ namespace DucMinh.UnityMcp.Editor
         {
             if (input.cameraInstanceIds == null || input.cameraInstanceIds.Count == 0 || input.cameraInstanceIds.Count > 8) throw new ArgumentException("cameraInstanceIds must contain between 1 and 8 cameras.");
             var cameraIds = input.cameraInstanceIds.Distinct().ToArray();
-            ValidateScreenshotCaptureBudget(cameraIds.Length, input.width, input.height);
+            var size = ResolveScreenshotSize(input.width, input.height);
+            ValidateScreenshotCaptureBudget(cameraIds.Length, size.x, size.y);
             var cameras = cameraIds.Select(id => ResolveLoadedCamera(id, "One or more cameraInstanceIds do not identify loaded Camera components or loaded scene GameObjects with Camera components.")).ToArray();
             var output = new ScreenshotMultiViewOutput();
             var content = new List<UnityMcpContent>();
             foreach (var camera in cameras)
             {
-                var result = CaptureCamera(camera, input.width, input.height, input.includeAlpha, out var info);
+                var result = CaptureCamera(camera, size.x, size.y, input.includeAlpha, out var info);
                 output.screenshots.Add(info);
                 content.AddRange(result.content);
             }
@@ -260,13 +263,23 @@ namespace DucMinh.UnityMcp.Editor
                 throw new ArgumentException("The requested screenshot capture can exceed the 16 MiB encoded response budget; reduce camera count or dimensions.");
         }
 
+        internal static Vector2Int ResolveScreenshotSize(int? requestedWidth, int? requestedHeight)
+        {
+            var gameViewSize = Handles.GetMainGameViewSize();
+            var gameViewWidth = Mathf.RoundToInt(gameViewSize.x);
+            var gameViewHeight = Mathf.RoundToInt(gameViewSize.y);
+            return new Vector2Int(
+                requestedWidth ?? (gameViewWidth > 0 ? gameViewWidth : 1280),
+                requestedHeight ?? (gameViewHeight > 0 ? gameViewHeight : 720));
+        }
+
         private static UnityMcpResult CaptureCamera(Camera camera, int width, int height, bool includeAlpha, out ScreenshotInfo info)
         {
             width = Mathf.Clamp(width, 16, 2048);
             height = Mathf.Clamp(height, 16, 2048);
             var previousTarget = camera.targetTexture;
             var previousActive = RenderTexture.active;
-            var renderTexture = RenderTexture.GetTemporary(width, height, 24, includeAlpha ? RenderTextureFormat.ARGB32 : RenderTextureFormat.RGB565);
+            var renderTexture = RenderTexture.GetTemporary(width, height, 24, includeAlpha ? RenderTextureFormat.ARGB32 : RenderTextureFormat.RGB565, RenderTextureReadWrite.sRGB);
             var texture = new Texture2D(width, height, TextureFormat.RGBA32, false, false);
             try
             {

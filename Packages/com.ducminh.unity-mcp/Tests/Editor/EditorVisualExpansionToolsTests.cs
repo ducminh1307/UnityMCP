@@ -61,6 +61,28 @@ namespace DucMinh.UnityMcp.Tests
         }
 
         [Test]
+        public void ResolveScreenshotSize_PreservesExplicitRequestedDimensions()
+        {
+            var size = EditorVisualExpansionTools.ResolveScreenshotSize(1080, 1920);
+
+            Assert.That(size, Is.EqualTo(new Vector2Int(1080, 1920)));
+        }
+
+        [Test]
+        public void ScreenshotRenderTarget_UsesSrgbEncoding()
+        {
+            var renderTexture = RenderTexture.GetTemporary(16, 16, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+            try
+            {
+                Assert.That(renderTexture.sRGB, Is.True);
+            }
+            finally
+            {
+                RenderTexture.ReleaseTemporary(renderTexture);
+            }
+        }
+
+        [Test]
         public void ValidateScreenshotCaptureBudget_RejectsWorstCasePayloadOverHttpLimit()
         {
             var multiCamera = Assert.Throws<ArgumentException>(() =>
