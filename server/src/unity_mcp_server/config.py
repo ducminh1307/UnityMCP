@@ -41,3 +41,49 @@ class GatewayLimits:
 
 
 DEFAULT_LIMITS = GatewayLimits()
+
+
+TOOL_PROFILES: dict[str, frozenset[str]] = {
+    "minimal": frozenset(
+        {
+            "unity-status",
+            "project-info",
+            "editor-state-get",
+            "compile-status",
+            "compile-errors",
+            "console-read",
+        }
+    ),
+    "diagnostics": frozenset(
+        {
+            "unity-status",
+            "project-info",
+            "editor-state-get",
+            "editor-selection-get",
+            "scene-list",
+            "gameobject-find",
+            "gameobject-get",
+            "asset-search",
+            "asset-info",
+            "compile-status",
+            "compile-errors",
+            "console-read",
+            "console-analyze",
+            "package-list",
+        }
+    ),
+}
+
+
+def tool_allowlist_from_environment() -> frozenset[str] | None:
+    explicit = os.environ.get("UNITY_MCP_ALLOWED_TOOLS")
+    if explicit:
+        names = frozenset(name.strip() for name in explicit.split(",") if name.strip())
+        return names or frozenset()
+    profile = os.environ.get("UNITY_MCP_TOOL_PROFILE", "").strip().lower()
+    if not profile or profile == "default":
+        return None
+    if profile not in TOOL_PROFILES:
+        allowed = ", ".join(sorted(["default", *TOOL_PROFILES]))
+        raise ValueError(f"Unknown UNITY_MCP_TOOL_PROFILE {profile!r}; expected one of: {allowed}")
+    return TOOL_PROFILES[profile]

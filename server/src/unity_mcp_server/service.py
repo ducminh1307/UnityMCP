@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
 from .bridge import UnityBridgeClient
-from .config import DEFAULT_LIMITS, GatewayLimits
+from .config import DEFAULT_LIMITS, GatewayLimits, tool_allowlist_from_environment
 from .errors import BridgeError, SchemaValidationError
 from .models import InstanceDescriptor, ToolDescriptor
 from .registry import DynamicToolRegistry
+from .telemetry import ToolTelemetryRecorder, tool_call_event, tools_list_event
 from .validation import validate_instance
 
 
@@ -37,12 +39,32 @@ class UnityGatewayService:
         self.bridge = bridge
         self.registry = registry
         self.limits = limits
+        self.tool_allowlist = tool_allowlist_from_environment()
+        self.telemetry = ToolTelemetryRecorder.from_environment()
 
     async def list_tools(self) -> tuple[ToolDescriptor, ...]:
+        started = time.perf_counter()
         snapshot = await self.registry.ensure_loaded()
-        return snapshot.advertised(self.descriptor.kind)
+        tools = snapshot.advertised(self.descriptor.kind)
+        if self.tool_allowlist is None:
+            result = tools
+        else:
+            result = tuple(tool for tool in tools if tool.name in self.tool_allowlist)
+        self.telemetry.record(
+            tools_list_event(
+                instance_id=self.descriptor.instance_id,
+                tool_count=len(result),
+                tools=[tool.catalog_dict() for tool in result],
+                duration_seconds=time.perf_counter() - started,
+            )
+        )
+        return result
 
     async def call_tool(self, name: str, arguments: Mapping[str, Any] | None) -> ToolCallOutput:
+        if self.tool_allowlist is not None and name not in self.tool_allowlist:
+            raise BridgeError(
+                "tool_unavailable", f"Tool {name!r} is not enabled by the UnityMCP gateway profile", status_code=404
+            )
         snapshot = await self.registry.ensure_loaded()
         tool = snapshot.by_name(name, self.descriptor.kind)
         if tool is None:
@@ -56,6 +78,8 @@ class UnityGatewayService:
         else:
             raise SchemaValidationError("Tool arguments must be a JSON object", phase="input")
         validate_instance(args, tool.input_schema, phase="input", limits=self.limits)
+        started = time.perf_counter()
+        raw: Mapping[str, Any] | None = None
         try:
             raw = await self.bridge.call_tool(
                 tool.name,
@@ -66,22 +90,64 @@ class UnityGatewayService:
         except BridgeError as exc:
             registry_conflicts = {"registry_conflict", "registry_revision_mismatch", "stale_registry"}
             if exc.code not in registry_conflicts:
+                self.telemetry.record(
+                    tool_call_event(
+                        instance_id=self.descriptor.instance_id,
+                        tool_name=tool.name,
+                        arguments=args,
+                        duration_seconds=time.perf_counter() - started,
+                        error_code=exc.code,
+                    )
+                )
                 raise
             snapshot = await self.registry.refresh(force=True)
             refreshed = snapshot.by_name(name, self.descriptor.kind)
             if refreshed is None:
-                raise BridgeError(
+                exc = BridgeError(
                     "tool_unavailable", f"Tool {name!r} became unavailable after the registry changed", status_code=404
-                ) from None
+                )
+                self.telemetry.record(
+                    tool_call_event(
+                        instance_id=self.descriptor.instance_id,
+                        tool_name=name,
+                        arguments=args,
+                        duration_seconds=time.perf_counter() - started,
+                        error_code=exc.code,
+                    )
+                )
+                raise exc from None
             validate_instance(args, refreshed.input_schema, phase="input", limits=self.limits)
             tool = refreshed
-            raw = await self.bridge.call_tool(
-                tool.name,
-                args,
-                snapshot.revision,
-                timeout_seconds=tool.timeout_ms / 1000,
+            try:
+                raw = await self.bridge.call_tool(
+                    tool.name,
+                    args,
+                    snapshot.revision,
+                    timeout_seconds=tool.timeout_ms / 1000,
+                )
+            except BridgeError as retry_exc:
+                self.telemetry.record(
+                    tool_call_event(
+                        instance_id=self.descriptor.instance_id,
+                        tool_name=tool.name,
+                        arguments=args,
+                        duration_seconds=time.perf_counter() - started,
+                        error_code=retry_exc.code,
+                    )
+                )
+                raise
+        try:
+            return self._normalize_tool_result(tool, raw)
+        finally:
+            self.telemetry.record(
+                tool_call_event(
+                    instance_id=self.descriptor.instance_id,
+                    tool_name=tool.name,
+                    arguments=args,
+                    duration_seconds=time.perf_counter() - started,
+                    raw_response=dict(raw) if raw is not None else None,
+                )
             )
-        return self._normalize_tool_result(tool, raw)
 
     async def get_job(self, job_id: str) -> dict[str, Any]:
         return await self.bridge.get_job(job_id)

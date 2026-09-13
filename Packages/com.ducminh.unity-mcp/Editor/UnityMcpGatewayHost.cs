@@ -184,6 +184,8 @@ namespace DucMinh.UnityMcp.Editor
     {
         private const string ProductKeyPrefix = "DucMinh.UnityMcp.Gateway.";
         private const string TokenEnvironmentVariable = "UNITY_MCP_HTTP_TOKEN";
+        private const string TelemetryPathEnvironmentVariable = "UNITY_MCP_TELEMETRY_PATH";
+        internal const string TelemetryRelativePath = "Temp/UnityMcpTelemetry.jsonl";
         private const string DefaultMcpPath = "/mcp";
         private const int DefaultPort = 8765;
         private const int PortProbeCount = 128;
@@ -1148,7 +1150,13 @@ namespace DucMinh.UnityMcp.Editor
             startInfo.ArgumentList.Add("WARNING");
             // Never pass the token through argv, where it is exposed in the process list.
             startInfo.EnvironmentVariables[TokenEnvironmentVariable] = token;
+            startInfo.EnvironmentVariables[TelemetryPathEnvironmentVariable] = GetProjectTelemetryPath();
             return startInfo;
+        }
+
+        internal static string GetProjectTelemetryPath()
+        {
+            return Path.GetFullPath(Path.Combine(GetProjectRootPath(), TelemetryRelativePath));
         }
 
         private static UnityMcpInstanceDescriptor FindCurrentEditorDescriptor()

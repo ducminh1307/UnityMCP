@@ -17,25 +17,25 @@ namespace DucMinh.UnityMcp
     [Serializable] public sealed class SetTimeScaleInput { public float timeScale = 1f; public float? fixedDeltaTime; public bool apply; }
     [Serializable] public sealed class SceneInfo { public int buildIndex; public string name; public string path; public bool isLoaded; public bool isDirty; public int rootCount; public bool isActive; }
     [Serializable] public sealed class SceneListOutput { public List<SceneInfo> scenes = new List<SceneInfo>(); }
-    [Serializable] public sealed class SceneHierarchyInput { public string scene; public string path; public int maxDepth = 12; public bool includeInactive = true; public bool includeComponents = true; public string nameContains; public string componentType; public bool includeHidden; public int rootOffset; public int rootLimit = 100; public string snapshotId; public string compareToSnapshot; }
+    [Serializable] public sealed class SceneHierarchyInput { public string scene; public string path; public int maxDepth = 3; public bool includeInactive = true; public bool includeComponents; public string nameContains; public string componentType; public bool includeHidden; public int rootOffset; public int rootLimit = 50; public string snapshotId; public string compareToSnapshot; }
     [Serializable] public sealed class GameObjectNode { public int instanceId; public string name; public string path; public bool activeSelf; public bool activeInHierarchy; public string tag; public int layer; public int hideFlags; public List<string> componentTypes = new List<string>(); public List<GameObjectNode> children = new List<GameObjectNode>(); public bool truncated; }
     [Serializable] public sealed class SceneHierarchyDiff { public int added; public int removed; public int changed; public List<string> addedPaths = new List<string>(); public List<string> removedPaths = new List<string>(); public List<string> changedPaths = new List<string>(); public bool truncated; }
     [Serializable] public sealed class SceneHierarchyOutput { public List<GameObjectNode> roots = new List<GameObjectNode>(); public int totalRoots; public bool truncated; public string snapshotId; public SceneHierarchyDiff diff; }
     [Serializable] public sealed class GameObjectSelector { public int? instanceId; public string path; }
-    [Serializable] public sealed class GameObjectFindInput { public string name; public string tag; public string scene; public bool includeInactive = true; public int limit = 100; }
+    [Serializable] public sealed class GameObjectFindInput { public string name; public string tag; public string scene; public bool includeInactive = true; public int limit = 50; }
     [Serializable] public sealed class GameObjectSummary { public int instanceId; public string name; public string path; public string scene; public bool activeSelf; public bool activeInHierarchy; }
     [Serializable] public sealed class GameObjectFindOutput { public List<GameObjectSummary> matches = new List<GameObjectSummary>(); public bool truncated; }
     [Serializable] public sealed class GameObjectGetInput { public int? instanceId; public string path; }
     [Serializable] public sealed class TransformInfo { public Vector3 localPosition; public Quaternion localRotation; public Vector3 localScale; public Vector3 worldPosition; public Quaternion worldRotation; }
     [Serializable] public sealed class GameObjectInfo { public int instanceId; public string name; public string path; public string scene; public bool activeSelf; public bool activeInHierarchy; public string tag; public int layer; public int? parentInstanceId; public TransformInfo transform; public List<string> componentTypes = new List<string>(); }
-    [Serializable] public sealed class ComponentTypesInput { public string search; public int limit = 200; }
+    [Serializable] public sealed class ComponentTypesInput { public string search; public int limit = 100; }
     [Serializable] public sealed class ComponentTypeInfo { public string fullName; public string assembly; public bool isBehaviour; }
     [Serializable] public sealed class ComponentTypesOutput { public List<ComponentTypeInfo> types = new List<ComponentTypeInfo>(); public bool truncated; }
     [Serializable] public sealed class ComponentSchemaInput { public string type; }
     [Serializable] public sealed class MemberSchemaInfo { public string name; public string type; public bool writable; public string kind; }
     [Serializable] public sealed class ComponentSchemaOutput { public string type; public List<MemberSchemaInfo> members = new List<MemberSchemaInfo>(); }
-    [Serializable] public sealed class ComponentGetInput { public int? instanceId; public string path; public string type; }
-    [Serializable] public sealed class ComponentInfo { public int instanceId; public string type; public string json; public bool enabled; }
+    [Serializable] public sealed class ComponentGetInput { public int? instanceId; public string path; public string type; public int maxJsonChars = 4096; }
+    [Serializable] public sealed class ComponentInfo { public int instanceId; public string type; public string json; public bool jsonTruncated; public bool enabled; }
     [Serializable] public sealed class ChangeJournalEntry { public string operation; public string before; public string after; }
     [Serializable] public sealed class ChangeOutput { public bool dryRun; public bool changed; public string summary; public int? instanceId; public List<ChangeJournalEntry> journal = new List<ChangeJournalEntry>(); public bool rollbackSupported; }
     [Serializable] public sealed class GameObjectCreateInput { public string name = "GameObject"; public int? parentInstanceId; public string parentPath; public Vector3? localPosition; public bool apply; }
@@ -46,8 +46,8 @@ namespace DucMinh.UnityMcp
     [Serializable] public sealed class ComponentAddInput { public int? instanceId; public string path; public string type; public bool apply; }
     [Serializable] public sealed class ComponentRemoveInput { public int? instanceId; public string path; public string type; public int componentIndex; public bool apply; }
     [Serializable] public sealed class ComponentSetPropertyInput { public int? instanceId; public string path; public string type; public int componentIndex; public string property; public string valueJson; public bool apply; }
-    [Serializable] public sealed class JobInput { public string jobId; }
-    [Serializable] public sealed class JobOutput { public string jobId; public string jobType; public bool cancellable; public bool canCancel; public string status; public float progress; public string progressMessage; public string createdUtc; public string startedUtc; public string completedUtc; public long durationMilliseconds; public string resultJson; public string error; }
+    [Serializable] public sealed class JobInput { public string jobId; public int maxResultChars = 32768; }
+    [Serializable] public sealed class JobOutput { public string jobId; public string jobType; public bool cancellable; public bool canCancel; public string status; public float progress; public string progressMessage; public string createdUtc; public string startedUtc; public string completedUtc; public long durationMilliseconds; public string resultJson; public bool resultTruncated; public string error; }
 
     public static class RuntimeCoreTools
     {
@@ -181,7 +181,10 @@ namespace DucMinh.UnityMcp
         {
             var gameObject = RequireGameObject(input.instanceId, input.path);
             var component = RequireComponents(gameObject, input.type).First();
-            return new ComponentInfo { instanceId = UnityMcpObjectId.Get(component), type = component.GetType().FullName, json = JsonUtility.ToJson(component), enabled = !(component is Behaviour behaviour) || behaviour.enabled };
+            var json = JsonUtility.ToJson(component);
+            var maxChars = Mathf.Clamp(input.maxJsonChars, 0, 262144);
+            var clipped = Clip(json, maxChars, out var truncated);
+            return new ComponentInfo { instanceId = UnityMcpObjectId.Get(component), type = component.GetType().FullName, json = clipped, jsonTruncated = truncated, enabled = !(component is Behaviour behaviour) || behaviour.enabled };
         }
 
         [UnityMcpTool("gameobject-create", Description = "Create a GameObject; dry-run unless apply is true.", Category = "gameobject", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write, SupportsDryRun = true)]
@@ -294,7 +297,7 @@ namespace DucMinh.UnityMcp
         {
             if (input == null || string.IsNullOrWhiteSpace(input.jobId)) throw new ArgumentException("jobId is required.");
             if (!UnityMcpJobStore.Shared.TryGet(input.jobId, out var job)) throw new ArgumentException("Unknown job.");
-            return ToJobOutput(job);
+            return ToJobOutput(job, input.maxResultChars);
         }
 
         [UnityMcpTool("job-cancel", Description = "Cancel one cancellable UnityMCP job.", Category = "automation", Scope = UnityMcpScope.All, Safety = UnityMcpSafety.Write)]
@@ -304,15 +307,20 @@ namespace DucMinh.UnityMcp
             if (!UnityMcpJobStore.Shared.TryGet(input.jobId, out var job)) throw new ArgumentException("Unknown job.");
             if (!job.CanCancel) throw new InvalidOperationException("The job does not support cancellation or is already terminal.");
             if (!UnityMcpJobStore.Shared.Cancel(input.jobId, out job)) throw new InvalidOperationException("The job can no longer be cancelled.");
-            return ToJobOutput(job);
+            return ToJobOutput(job, input.maxResultChars);
         }
-        private static JobOutput ToJobOutput(UnityMcpJob job) => new JobOutput
+        private static JobOutput ToJobOutput(UnityMcpJob job, int maxResultChars)
+        {
+            var resultJson = job.result == null ? null : JsonConvert.SerializeObject(job.result);
+            var clipped = Clip(resultJson, Mathf.Clamp(maxResultChars, 0, 262144), out var truncated);
+            return new JobOutput
         {
             jobId = job.jobId, jobType = job.jobType, cancellable = job.cancellable, canCancel = job.CanCancel,
             status = job.status, progress = job.progress, progressMessage = job.progressMessage,
             createdUtc = job.createdUtc, startedUtc = job.startedUtc, completedUtc = job.completedUtc, durationMilliseconds = job.durationMilliseconds,
-            resultJson = job.result == null ? null : JsonConvert.SerializeObject(job.result), error = job.error
+                resultJson = clipped, resultTruncated = truncated, error = job.error
         };
+        }
 #endif
 
         [UnityMcpTool("screenshot-game-view", Description = "Capture the Development Player framebuffer as PNG.", Category = "visual", Scope = UnityMcpScope.Runtime, Safety = UnityMcpSafety.SafeRead)]
@@ -344,6 +352,20 @@ namespace DucMinh.UnityMcp
         }
 
         internal static ChangeOutput Change(UnityMcpContext context, string summary, int? instanceId = null) => new ChangeOutput { dryRun = context.DryRun, changed = !context.DryRun, summary = summary, instanceId = instanceId };
+
+        internal static string Clip(string value, int limit, out bool truncated)
+        {
+            truncated = false;
+            if (value == null) return null;
+            if (limit <= 0)
+            {
+                truncated = value.Length > 0;
+                return string.Empty;
+            }
+            if (value.Length <= limit) return value;
+            truncated = true;
+            return value.Substring(0, Math.Max(0, limit - 1)) + "…";
+        }
 
         internal static Scene FindScene(string selector)
         {

@@ -38,7 +38,7 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class WorkflowJobStartOutput { public bool dryRun; public bool accepted; public string jobId; public string status; public string summary; }
     [Serializable] public sealed class CompileRequestResult { public bool requested; public bool compilationObserved; public bool isCompiling; public string note; }
     [Serializable] internal sealed class PersistedCompileRequest { public string jobId; public string createdUtc; public string startedUtc; public float progress; public string progressMessage; public string requestedUtc; public string deadlineUtc; }
-    [Serializable] public sealed class ConsoleAnalyzeInput { public int limit = 500; public string severity; public string contains; }
+    [Serializable] public sealed class ConsoleAnalyzeInput { public int limit = 100; public string severity; public string contains; }
     [Serializable] public sealed class ConsoleAnalysisGroup { public string signature; public string severity; public int count; public string example; }
     [Serializable] public sealed class ConsoleAnalysisOutput { public int total; public int errors; public int warnings; public int logs; public bool truncated; public List<ConsoleAnalysisGroup> groups = new List<ConsoleAnalysisGroup>(); }
 
@@ -68,8 +68,8 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class BuildPlayerInput { public string outputPath; public string targetGroup; public string target; public List<string> scenes; public bool development = true; public bool allowDebugging; public bool connectProfiler; public bool apply; }
     [Serializable] public sealed class BuildPlayerJobResult { public string outputPath; public string target; public string targetGroup; public string result; public int totalErrors; public int totalWarnings; public ulong totalSize; public double totalTimeSeconds; }
     [Serializable] public sealed class BuildTargetSwitchJobResult { public string target; public string targetGroup; public bool switched; }
-    [Serializable] public sealed class BuildJobGetInput { public string jobId; }
-    [Serializable] public sealed class BuildJobGetOutput { public string jobId; public string jobType; public string status; public float progress; public string progressMessage; public string createdUtc; public string startedUtc; public string completedUtc; public long durationMilliseconds; public string resultJson; public string error; }
+    [Serializable] public sealed class BuildJobGetInput { public string jobId; public int maxResultChars = 32768; }
+    [Serializable] public sealed class BuildJobGetOutput { public string jobId; public string jobType; public string status; public float progress; public string progressMessage; public string createdUtc; public string startedUtc; public string completedUtc; public long durationMilliseconds; public string resultJson; public bool resultTruncated; public string error; }
 
     /// <summary>
     /// Editor-only workflow tools.  Every mutation remains opt-in through the
@@ -415,11 +415,26 @@ namespace DucMinh.UnityMcp.Editor
             if (string.IsNullOrWhiteSpace(input.jobId) || !BuildJobTracker.Contains(input.jobId)) throw new ArgumentException("Unknown build job.");
             UnityMcpJob job;
             if (!UnityMcpJobStore.Shared.TryGet(input.jobId, out job)) throw new ArgumentException("Build job is no longer available in this Unity domain.");
-            return new BuildJobGetOutput { jobId = job.jobId, jobType = job.jobType, status = job.status, progress = job.progress, progressMessage = job.progressMessage, createdUtc = job.createdUtc, startedUtc = job.startedUtc, completedUtc = job.completedUtc, durationMilliseconds = job.durationMilliseconds, resultJson = job.result == null ? null : JsonConvert.SerializeObject(job.result), error = job.error };
+            var resultJson = job.result == null ? null : JsonConvert.SerializeObject(job.result);
+            var clipped = Clip(resultJson, Math.Max(0, Math.Min(input.maxResultChars, 262144)), out var truncated);
+            return new BuildJobGetOutput { jobId = job.jobId, jobType = job.jobType, status = job.status, progress = job.progress, progressMessage = job.progressMessage, createdUtc = job.createdUtc, startedUtc = job.startedUtc, completedUtc = job.completedUtc, durationMilliseconds = job.durationMilliseconds, resultJson = clipped, resultTruncated = truncated, error = job.error };
         }
 
         private static WorkflowJobStartOutput DryRunJob(string summary) => new WorkflowJobStartOutput { dryRun = true, accepted = false, status = "dry-run", summary = summary };
         private static WorkflowJobStartOutput AcceptedJob(UnityMcpJobHandle job, string summary) => new WorkflowJobStartOutput { accepted = true, jobId = job.jobId, status = job.status, summary = summary };
+        private static string Clip(string value, int limit, out bool truncated)
+        {
+            truncated = false;
+            if (value == null) return null;
+            if (limit <= 0)
+            {
+                truncated = value.Length > 0;
+                return string.Empty;
+            }
+            if (value.Length <= limit) return value;
+            truncated = true;
+            return value.Substring(0, Math.Max(0, limit - 1)) + "…";
+        }
 
         private static ScriptWriteOutput ScriptChange(UnityMcpContext context, string path, string before, string after, string operation, string journalBefore, string journalAfter)
         {

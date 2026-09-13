@@ -42,7 +42,7 @@ namespace DucMinh.UnityMcp.Editor
     [Serializable] public sealed class MaterialPropertyInfo { public string name; public string description; public string type; }
     [Serializable] public sealed class MaterialSetPropertyInput { public string path; public string property; public string valueJson; public bool apply; }
     [Serializable] public sealed class CompileStatusOutput { public bool isCompiling; public bool isUpdating; public string[] assemblies; }
-    [Serializable] public sealed class ConsoleReadInput { public int limit = 100; public string severity; public string contains; public long afterCursor = -1; }
+    [Serializable] public sealed class ConsoleReadInput { public int limit = 50; public string severity; public string contains; public long afterCursor = -1; public int maxMessageChars = 4096; public int maxStackTraceChars = 8192; }
     [Serializable] public sealed class ConsoleEntryInfo { public long cursor; public string observedUtc; public string message; public string stackTrace; public string file; public int line; public string severity; }
     [Serializable] public sealed class ConsoleReadOutput { public List<ConsoleEntryInfo> entries = new List<ConsoleEntryInfo>(); public long firstCursor = -1; public long lastCursor = -1; public long nextCursor = -1; public bool cursorReset; public bool truncated; }
     [Serializable] public sealed class CompileErrorsOutput { public List<ConsoleEntryInfo> errors = new List<ConsoleEntryInfo>(); }
@@ -542,6 +542,8 @@ public static class {input.className}
             var end = logEntries.GetMethod("EndGettingEntries", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
             var get = logEntries.GetMethod("GetEntryInternal", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
             var limit = Math.Max(1, Math.Min(input.limit, 1000));
+            var maxMessageChars = Math.Max(0, Math.Min(input.maxMessageChars, 65536));
+            var maxStackTraceChars = Math.Max(0, Math.Min(input.maxStackTraceChars, 262144));
             var afterCursor = input.afterCursor;
             var cursorReset = afterCursor >= count;
             if (cursorReset) afterCursor = -1;
@@ -564,7 +566,7 @@ public static class {input.className}
                     if (!string.IsNullOrEmpty(input.severity) && !string.Equals(input.severity, severity, StringComparison.OrdinalIgnoreCase)) continue;
                     if (!string.IsNullOrEmpty(input.contains) && (message == null || message.IndexOf(input.contains, StringComparison.OrdinalIgnoreCase) < 0)) continue;
                     if (output.entries.Count >= limit) { output.truncated = true; break; }
-                    output.entries.Add(new ConsoleEntryInfo { cursor = index, observedUtc = observedUtc, message = message, stackTrace = Text(logEntry, entry, "stackTrace", "stacktrace"), file = Text(logEntry, entry, "file"), line = Convert.ToInt32(Member(logEntry, entry, "line") ?? 0), severity = severity });
+                    output.entries.Add(new ConsoleEntryInfo { cursor = index, observedUtc = observedUtc, message = Clip(message, maxMessageChars), stackTrace = Clip(Text(logEntry, entry, "stackTrace", "stacktrace"), maxStackTraceChars), file = Text(logEntry, entry, "file"), line = Convert.ToInt32(Member(logEntry, entry, "line") ?? 0), severity = severity });
                 }
             }
             finally { end?.Invoke(null, null); }
@@ -611,6 +613,13 @@ public static class {input.className}
             }
 
             return string.Empty;
+        }
+
+        private static string Clip(string value, int limit)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length <= limit) return value;
+            if (limit <= 0) return string.Empty;
+            return value.Substring(0, Math.Max(0, limit - 1)) + "…";
         }
 
         private static object Member(Type type, object value, string name)

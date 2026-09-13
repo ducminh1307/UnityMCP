@@ -71,3 +71,44 @@ can override descriptor discovery for CI or advanced local setups.
 The MCP endpoint is `/mcp`. The gateway also exposes `unity://instance`,
 `unity://tools`, and `unity://jobs/{jobId}` resources. Only tools that Unity
 marks implemented, enabled, and valid for the selected instance are advertised.
+
+### Token-conscious tool profiles
+
+Large Unity projects can expose many enabled tools and produce large tool
+results. To reduce MCP context size for API-backed clients, the gateway can
+apply an extra allowlist before advertising or calling tools:
+
+```console
+UNITY_MCP_TOOL_PROFILE=minimal unity-mcp --instance <instance-id>
+UNITY_MCP_TOOL_PROFILE=diagnostics unity-mcp --instance <instance-id>
+UNITY_MCP_ALLOWED_TOOLS=unity-status,compile-status,compile-errors unity-mcp --instance <instance-id>
+```
+
+`default` preserves Unity's local enablement exactly. `minimal` exposes only
+basic status, project, compilation, and Console reads. `diagnostics` adds common
+scene, object, asset, package, and Console diagnostic reads. An explicit
+`UNITY_MCP_ALLOWED_TOOLS` comma-separated list takes precedence over profiles.
+
+### Local telemetry for tool cost analysis
+
+UnityMCP can write local JSONL telemetry that estimates context pressure by
+recording tool names, request bytes, response bytes, content bytes, structured
+bytes, duration, error status, and truncation flags. It does not send telemetry
+anywhere. For manually launched gateways, enable it explicitly:
+
+```console
+UNITY_MCP_TELEMETRY_PATH=Temp/unity-mcp-telemetry.jsonl unity-mcp --instance <instance-id>
+```
+
+Or set `UNITY_MCP_TELEMETRY=1` to write `unity-mcp-telemetry.jsonl` in the
+gateway working directory. Summarize the largest tool payloads from the
+repository root:
+
+```console
+python tools/analyze_mcp_telemetry.py Temp/unity-mcp-telemetry.jsonl
+```
+
+When the Unity Editor starts the gateway from **Window > UnityMCP > Tools**, it
+sets `UNITY_MCP_TELEMETRY_PATH` automatically to the current project's
+`Temp/UnityMcpTelemetry.jsonl`. Use the window's **Analytics** tab to inspect
+that per-project file directly inside Unity.

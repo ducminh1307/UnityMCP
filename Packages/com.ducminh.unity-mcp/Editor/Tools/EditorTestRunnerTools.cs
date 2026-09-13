@@ -75,10 +75,12 @@ namespace DucMinh.UnityMcp.Editor
         public double durationSeconds;
         public string message;
         public string finishedUtc;
+        public int totalResults;
+        public bool resultsTruncated;
         public List<TestCaseResultOutput> results = new List<TestCaseResultOutput>();
     }
 
-    [Serializable] public sealed class TestJobGetInput { public string jobId; }
+    [Serializable] public sealed class TestJobGetInput { public string jobId; public bool includePassed; public int resultLimit = 100; public int maxMessageChars = 2048; public int maxStackTraceChars = 8192; }
     [Serializable] public sealed class TestCancelInput { public string jobId; public bool apply; }
     [Serializable] public sealed class TestCancelOutput { public bool dryRun; public bool cancelled; public string jobId; public string runnerId; public string status; public string summary; }
     [Serializable] internal sealed class PersistedTestRun { public string jobId; public string runnerId; public string mode; public string createdUtc; public string startedUtc; public string deadlineUtc; public float progress; public string progressMessage; }
@@ -156,9 +158,9 @@ namespace DucMinh.UnityMcp.Editor
             if (!UnityMcpJobStore.Shared.TryGet(input.jobId, out var job)) throw new ArgumentException("Unknown UnityMCP test job.");
             lock (Gate)
             {
-                if (active != null && string.Equals(active.job.jobId, input.jobId, StringComparison.Ordinal)) return active.ToOutput();
+                if (active != null && string.Equals(active.job.jobId, input.jobId, StringComparison.Ordinal)) return Compact(active.ToOutput(), input);
             }
-            if (job.result?.structuredContent is TestRunResultOutput result) return result;
+            if (job.result?.structuredContent is TestRunResultOutput result) return Compact(result, input);
             return new TestRunResultOutput { jobId = job.jobId, status = job.status, message = job.error };
         }
 
@@ -254,6 +256,48 @@ namespace DucMinh.UnityMcp.Editor
 
         private static string ModeName(TestMode mode) => mode == TestMode.EditMode ? "editmode" : "playmode";
 
+        private static TestRunResultOutput Compact(TestRunResultOutput input, TestJobGetInput options)
+        {
+            var includePassed = options != null && options.includePassed;
+            var limit = Math.Max(1, Math.Min(options?.resultLimit ?? 100, 1000));
+            var maxMessageChars = Math.Max(0, Math.Min(options?.maxMessageChars ?? 2048, 65536));
+            var maxStackTraceChars = Math.Max(0, Math.Min(options?.maxStackTraceChars ?? 8192, 262144));
+            var source = input.results ?? new List<TestCaseResultOutput>();
+            var selected = source
+                .Where(result => includePassed || !string.Equals(result.state, "Passed", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(result => result.fullName, StringComparer.Ordinal)
+                .ToList();
+            return new TestRunResultOutput
+            {
+                jobId = input.jobId,
+                jobType = input.jobType,
+                runnerId = input.runnerId,
+                status = input.status,
+                progress = input.progress,
+                progressMessage = input.progressMessage,
+                durationMilliseconds = input.durationMilliseconds,
+                resultState = input.resultState,
+                passed = input.passed,
+                failed = input.failed,
+                skipped = input.skipped,
+                inconclusive = input.inconclusive,
+                asserts = input.asserts,
+                durationSeconds = input.durationSeconds,
+                message = Clip(input.message, maxMessageChars),
+                finishedUtc = input.finishedUtc,
+                totalResults = source.Count,
+                resultsTruncated = selected.Count > limit,
+                results = selected.Take(limit).Select(result => new TestCaseResultOutput
+            {
+                fullName = result.fullName,
+                state = result.state,
+                durationSeconds = result.durationSeconds,
+                message = Clip(result.message, maxMessageChars),
+                stackTrace = Clip(result.stackTrace, maxStackTraceChars)
+                }).ToList()
+            };
+        }
+
         private static List<string> NormalizeList(List<string> values, string field, int maxCount, int maxLength)
         {
             values = values ?? new List<string>();
@@ -267,6 +311,12 @@ namespace DucMinh.UnityMcp.Editor
                 if (!output.Contains(normalized)) output.Add(normalized);
             }
             return output;
+        }
+
+        private static string Clip(string value, int limit)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length <= limit) return value;
+            return value.Substring(0, limit - 1) + "…";
         }
 
         private sealed class ActiveTestRun : ICallbacks
@@ -380,11 +430,6 @@ namespace DucMinh.UnityMcp.Editor
                 if (api != null) UnityEngine.Object.DestroyImmediate(api);
             }
 
-            private static string Clip(string value, int limit)
-            {
-                if (string.IsNullOrEmpty(value) || value.Length <= limit) return value;
-                return value.Substring(0, limit - 1) + "…";
-            }
         }
     }
 
@@ -445,3 +490,4 @@ namespace DucMinh.UnityMcp.Editor
         }
     }
 }
+

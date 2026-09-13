@@ -11,8 +11,8 @@ typed, permission-controlled tool registry.
   Player are exposed to MCP clients.
 - Project-specific C# methods can become MCP tools without adding matching
   Python registrations.
-- All communication stays on the local machine. Remote access and telemetry are
-  disabled by design.
+- All communication stays on the local machine. Remote access is disabled by
+  design; MCP analytics are local project files only.
 
 ## Requirements
 
@@ -133,6 +133,11 @@ Unity process exits. If the child gateway crashes or stops answering its local
 HTTP probe, the Editor retries the same endpoint with bounded backoff; selecting
 **Stop gateway** cancels that restart intent.
 
+Editor-managed gateways also write project-local MCP analytics to
+`Temp/UnityMcpTelemetry.jsonl`. Open **Window > UnityMCP > Tools > Analytics**
+in each Unity project to see which tools return the largest payloads, how often
+they fail, and whether responses were truncated.
+
 For an advanced client-managed stdio setup, configure the installed command in
 your MCP client:
 
@@ -169,6 +174,17 @@ be changed by a local Editor user; an MCP client cannot extend its own access.
 The gateway advertises only tools that are implemented, valid, enabled, and in
 scope for the connected Unity process. Planned catalog entries are never exposed
 as callable MCP tools.
+
+For API-backed clients where token spend matters, set
+`UNITY_MCP_TOOL_PROFILE=minimal` or `UNITY_MCP_TOOL_PROFILE=diagnostics` on the
+gateway process to advertise a smaller task-focused tool set. Use
+`UNITY_MCP_ALLOWED_TOOLS` for an exact comma-separated allowlist. See the
+[gateway documentation](server/README.md#token-conscious-tool-profiles).
+To identify which tools produce the largest payloads, enable local JSONL
+telemetry with `UNITY_MCP_TELEMETRY_PATH` and summarize it with
+`python tools/analyze_mcp_telemetry.py <path>`. For Editor-managed gateways,
+use the **Analytics** tab in the UnityMCP window to inspect the current
+project's telemetry directly inside Unity.
 
 ## Custom tools
 

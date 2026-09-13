@@ -320,14 +320,14 @@ Poll long-running task status, progress, and results:
 | Tool | Status | Scope | Safety | Default | Dependency | Description |
 |---|---|---|---|---|---|---|
 | `scene-list` | implemented | editor, runtime | safe-read | Yes | `unity-core` | List loaded scenes and active-scene metadata. |
-| `scene-hierarchy` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Read a bounded hierarchy projection for one or more scenes. |
+| `scene-hierarchy` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Read a compact bounded hierarchy projection for one or more scenes. |
 | `scene-create` | implemented | editor | write | No | `unity-editor` | Dry-run or create a new scene asset. |
 | `scene-open` | implemented | editor | write | No | `unity-editor` | Dry-run or open a scene in single or additive mode. |
 | `scene-close` | implemented | editor | write | No | `unity-editor` | Close a loaded Editor scene with explicit dirty-scene handling. |
 | `scene-save` | implemented | editor | write | No | `unity-editor` | Dry-run or save a scene and return changed assets. |
 | `scene-set-active` | implemented | editor, runtime | write | No | `unity-core` | Set the active loaded scene. |
 | `scene-validate` | implemented | editor | safe-read | No | `unity-editor` | Find missing scripts, broken references, and common scene issues. |
-| `gameobject-find` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Find GameObjects with bounded name, tag, layer, path, or component filters. |
+| `gameobject-find` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Find GameObjects with compact bounded name, tag, layer, path, or component filters. |
 | `gameobject-get` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Read identity, transform, properties, and component summaries. |
 | `gameobject-create` | implemented | editor, runtime | write | No | `unity-core` | Dry-run or create a GameObject with an optional parent. |
 | `gameobject-duplicate` | implemented | editor, runtime | write | No | `unity-core` | Duplicate a GameObject and return its new stable reference. |
@@ -344,9 +344,9 @@ Poll long-running task status, progress, and results:
 
 | Tool | Status | Scope | Safety | Default | Dependency | Description |
 |---|---|---|---|---|---|---|
-| `component-types` | implemented | editor, runtime | safe-read | Yes | `unity-core` | List attachable component types visible to the target. |
+| `component-types` | implemented | editor, runtime | safe-read | Yes | `unity-core` | List attachable component types visible to the target with compact defaults. |
 | `component-schema` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Return the writable and readable schema for a component type. |
-| `component-get` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Read serialized fields and supported properties from a component. |
+| `component-get` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Read bounded serialized fields and supported properties from a component. |
 | `component-add` | implemented | editor, runtime | write | No | `unity-core` | Dry-run or add a component by validated type name. |
 | `component-remove` | implemented | editor, runtime | destructive | No | `unity-core` | Dry-run or remove a component, using Undo in the Editor. |
 | `component-set-property` | implemented | editor, runtime | write | No | `unity-core` | Dry-run or set one schema-validated component property. |
@@ -424,12 +424,12 @@ Poll long-running task status, progress, and results:
 
 | Tool | Status | Scope | Safety | Default | Dependency | Description |
 |---|---|---|---|---|---|---|
-| `console-read` | implemented | editor | safe-read | Yes | `unity-editor` | Read bounded structured Unity Console entries. |
+| `console-read` | implemented | editor | safe-read | Yes | `unity-editor` | Read compact bounded structured Unity Console entries. |
 | `console-clear` | implemented | editor | destructive | No | `unity-editor` | Clear Unity Console entries after explicit opt-in. |
-| `console-analyze` | implemented | editor | safe-read | No | `unity-editor` | Group and summarize Console entries by signature and severity. |
+| `console-analyze` | implemented | editor | safe-read | No | `unity-editor` | Group and summarize Console entries by signature and severity with compact defaults. |
 | `test-list` | implemented | editor | safe-read | No | `com.unity.test-framework` | List available EditMode and PlayMode tests. |
 | `test-run` | implemented | editor | write | No | `com.unity.test-framework` | Start a filtered Unity Test Framework run. |
-| `test-job-get` | implemented | editor | safe-read | No | `com.unity.test-framework` | Read progress and results for a test job. |
+| `test-job-get` | implemented | editor | safe-read | No | `com.unity.test-framework` | Read compact progress and failure-focused results for a test job. |
 | `test-cancel` | implemented | editor | write | No | `com.unity.test-framework` | Request cancellation of a running test job. |
 
 <a id="packages-build"></a>
@@ -449,7 +449,7 @@ Poll long-running task status, progress, and results:
 | `build-settings-set` | implemented | editor | write | No | `unity-editor` | Dry-run or update supported build settings. |
 | `build-target-switch` | implemented | editor | unsafe | No | `unity-editor` | Switch the active build target as an asynchronous job. |
 | `build-player` | implemented | editor | unsafe | No | `unity-editor` | Build a player to a contained output path as a job. |
-| `build-job-get` | implemented | editor | safe-read | No | `unity-editor` | Read progress and report details for a build job. |
+| `build-job-get` | implemented | editor | safe-read | No | `unity-editor` | Read progress and bounded report details for a build job. |
 | `player-settings-get` | implemented | editor | safe-read | No | `unity-editor` | Read supported non-secret Player Settings for an active or selected target group. |
 | `player-settings-set` | implemented | editor | write | No | `unity-editor` | Dry-run or update a supported non-secret subset of Player Settings. |
 
@@ -615,8 +615,8 @@ Poll long-running task status, progress, and results:
 | `checkpoint-list` | implemented | editor | safe-read | No | `unity-editor` | List locally available UnityMCP checkpoints. |
 | `checkpoint-diff` | implemented | editor | safe-read | No | `unity-editor` | Compare a checkpoint with current supported project state. |
 | `checkpoint-restore` | implemented | editor | destructive | No | `unity-editor` | Restore explicitly selected state from a checkpoint. |
-| `job-get` | implemented | editor, runtime | safe-read | No | `unity-core` | Read state, progress, result, or error for a bridge job. |
-| `job-cancel` | implemented | editor, runtime | write | No | `unity-core` | Request cancellation for a job that declares cancellation support. |
+| `job-get` | implemented | editor, runtime | safe-read | No | `unity-core` | Read state, progress, bounded result, or error for a bridge job. |
+| `job-cancel` | implemented | editor, runtime | write | No | `unity-core` | Request cancellation for a job that declares cancellation support and return bounded job details. |
 | `execute-csharp` | implemented | editor | unsafe | No | `unity-editor` | Invoke an explicitly allowlisted project C# command; never compile or evaluate source text. |
 
 <a id="project-extensions"></a>

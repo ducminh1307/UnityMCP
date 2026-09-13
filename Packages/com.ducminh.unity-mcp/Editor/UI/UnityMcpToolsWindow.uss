@@ -459,6 +459,50 @@
     white-space: normal;
 }
 
+.unity-mcp-analytics-table {
+    flex-direction: column;
+    min-width: 0;
+}
+
+.unity-mcp-analytics-row {
+    flex-direction: row;
+    align-items: center;
+    min-height: 28px;
+    padding-left: 7px;
+    padding-right: 7px;
+    border-bottom-width: 1px;
+    border-bottom-color: var(--unity-colors-default-border);
+}
+
+.unity-mcp-analytics-row:hover {
+    background-color: var(--unity-colors-alternate-background);
+}
+
+.unity-mcp-analytics-row--header {
+    min-height: 30px;
+    background-color: var(--unity-colors-alternate-background);
+    -unity-font-style: bold;
+}
+
+.unity-mcp-analytics-cell {
+    min-width: 0;
+    padding-right: 8px;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.unity-mcp-analytics-cell--tool {
+    flex-grow: 1;
+    flex-basis: 0;
+}
+
+.unity-mcp-analytics-cell--number {
+    width: 78px;
+    -unity-text-align: middle-right;
+}
+
 .unity-mcp-allow-list-content > * {
     margin-bottom: 10px;
 }

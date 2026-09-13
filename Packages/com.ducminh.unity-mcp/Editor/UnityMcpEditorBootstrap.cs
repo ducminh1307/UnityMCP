@@ -184,6 +184,7 @@ namespace DucMinh.UnityMcp.Editor
             Connection,
             Tools,
             AllowLists,
+            Analytics,
             Runtime
         }
 
@@ -239,6 +240,7 @@ namespace DucMinh.UnityMcp.Editor
         private VisualElement toolsContainer;
         private Button toolsPageButton;
         private UnityMcpAllowListsView allowListsView;
+        private UnityMcpAnalyticsView analyticsView;
 
         private Label runtimeProfileStatusLabel;
         private Button runtimePrimaryButton;
@@ -288,19 +290,23 @@ namespace DucMinh.UnityMcp.Editor
             toolsPage.AddToClassList("unity-mcp-page");
             toolsPage.style.flexGrow = 1;
             var allowListsPage = CreateScrollPage("unity-mcp-allow-lists-page");
+            var analyticsPage = CreateScrollPage("unity-mcp-analytics-page");
             var runtimePage = CreateScrollPage("unity-mcp-runtime-page");
             pages[Page.Connection] = connectionPage;
             pages[Page.Tools] = toolsPage;
             pages[Page.AllowLists] = allowListsPage;
+            pages[Page.Analytics] = analyticsPage;
             pages[Page.Runtime] = runtimePage;
             pageHost.Add(connectionPage);
             pageHost.Add(toolsPage);
             pageHost.Add(allowListsPage);
+            pageHost.Add(analyticsPage);
             pageHost.Add(runtimePage);
 
             BuildConnectionPage(connectionPage);
             BuildToolsPage(toolsPage);
             BuildAllowListsPage(allowListsPage);
+            BuildAnalyticsPage(analyticsPage);
             BuildRuntimePage(runtimePage);
 
             LoadGatewaySettings();
@@ -366,6 +372,7 @@ namespace DucMinh.UnityMcp.Editor
             AddPageButton(navigation, Page.Connection, "Connection", "Start or connect the local MCP gateway.");
             toolsPageButton = AddPageButton(navigation, Page.Tools, "Tools", "Review and enable the tools advertised to MCP clients.");
             AddPageButton(navigation, Page.AllowLists, "Allow Lists", "Create and edit the project-owned allowlist assets used by enabled tools.");
+            AddPageButton(navigation, Page.Analytics, "Analytics", "Inspect this project's MCP tool payload telemetry.");
             AddPageButton(navigation, Page.Runtime, "Runtime", "Configure the optional Development Player runtime bridge.");
         }
 
@@ -387,6 +394,7 @@ namespace DucMinh.UnityMcp.Editor
                 entry.Value.EnableInClassList("unity-mcp-nav__item--active", entry.Key == page);
             if (page == Page.Tools) RebuildToolList();
             if (page == Page.AllowLists) allowListsView?.Refresh();
+            if (page == Page.Analytics) analyticsView?.Refresh();
         }
 
         private void BuildConnectionPage(ScrollView page)
@@ -610,6 +618,13 @@ namespace DucMinh.UnityMcp.Editor
             page.Add(allowListsView);
         }
 
+        private void BuildAnalyticsPage(ScrollView page)
+        {
+            page.contentContainer.AddToClassList("unity-mcp-stack");
+            analyticsView = new UnityMcpAnalyticsView();
+            page.Add(analyticsView);
+        }
+
         private void BuildRuntimePage(ScrollView page)
         {
             page.contentContainer.AddToClassList("unity-mcp-stack");
@@ -667,6 +682,7 @@ namespace DucMinh.UnityMcp.Editor
             ObserveRegistry();
             RefreshGatewayStatus(UnityMcpGatewayHost.GetStatus());
             allowListsView?.RefreshToolStatuses();
+            if (activePage == Page.Analytics) analyticsView?.Refresh();
             RefreshRuntimeProfile();
         }
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from unity_mcp_server.bridge import RegistryHttpResult
@@ -56,6 +58,7 @@ class FakeBridge:
         self.revision = 1
         self.conflict_once = False
         self.bad_output = False
+        self.fail_code: str | None = None
 
     async def verify_instance(self):
         return None
@@ -69,6 +72,8 @@ class FakeBridge:
 
     async def call_tool(self, name, arguments, revision, *, timeout_seconds):
         self.calls.append((name, arguments, revision, timeout_seconds))
+        if self.fail_code is not None:
+            raise BridgeError(self.fail_code, "forced failure", retryable=True)
         if self.conflict_once:
             self.conflict_once = False
             self.revision += 1
@@ -129,6 +134,68 @@ async def test_service_refreshes_and_retries_one_registry_conflict() -> None:
 
     assert output.structured_content == {"echo": 3}
     assert [call[2] for call in bridge.calls] == ["1", "2"]
+
+
+@pytest.mark.asyncio
+async def test_service_limits_advertised_and_callable_tools_with_allowlist(monkeypatch) -> None:
+    monkeypatch.setenv("UNITY_MCP_ALLOWED_TOOLS", "echo")
+    bridge = FakeBridge([descriptor(), descriptor("other")])
+    gateway = service(bridge)
+
+    assert [item.name for item in await gateway.list_tools()] == ["echo"]
+    output = await gateway.call_tool("echo", {"value": 2})
+    assert output.structured_content == {"echo": 2}
+
+    with pytest.raises(BridgeError) as unavailable:
+        await gateway.call_tool("other", {"value": 2})
+    assert unavailable.value.code == "tool_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_service_minimal_profile_advertises_core_tools(monkeypatch) -> None:
+    monkeypatch.setenv("UNITY_MCP_TOOL_PROFILE", "minimal")
+    bridge = FakeBridge([descriptor("unity-status"), descriptor("compile-status"), descriptor("scene-hierarchy")])
+    gateway = service(bridge)
+
+    assert [item.name for item in await gateway.list_tools()] == ["compile-status", "unity-status"]
+
+
+@pytest.mark.asyncio
+async def test_service_writes_opt_in_tool_telemetry(monkeypatch, tmp_path) -> None:
+    telemetry_path = tmp_path / "unity-mcp-telemetry.jsonl"
+    monkeypatch.setenv("UNITY_MCP_TELEMETRY_PATH", str(telemetry_path))
+    bridge = FakeBridge([descriptor()])
+    gateway = service(bridge)
+
+    await gateway.list_tools()
+    await gateway.call_tool("echo", {"value": 9})
+
+    events = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines()]
+    assert [event["event"] for event in events] == ["tools/list", "tools/call"]
+    assert events[0]["toolCount"] == 1
+    assert events[0]["responseBytes"] > 0
+    assert events[1]["toolName"] == "echo"
+    assert events[1]["requestBytes"] > 0
+    assert events[1]["responseBytes"] > 0
+    assert events[1]["isError"] is False
+
+
+@pytest.mark.asyncio
+async def test_service_writes_telemetry_for_bridge_errors(monkeypatch, tmp_path) -> None:
+    telemetry_path = tmp_path / "unity-mcp-telemetry.jsonl"
+    monkeypatch.setenv("UNITY_MCP_TELEMETRY_PATH", str(telemetry_path))
+    bridge = FakeBridge([descriptor()])
+    bridge.fail_code = "timeout"
+    gateway = service(bridge)
+
+    with pytest.raises(BridgeError):
+        await gateway.call_tool("echo", {"value": 9})
+
+    event = json.loads(telemetry_path.read_text(encoding="utf-8").splitlines()[0])
+    assert event["event"] == "tools/call"
+    assert event["toolName"] == "echo"
+    assert event["isError"] is True
+    assert event["errorCode"] == "timeout"
 
 
 @pytest.mark.asyncio
