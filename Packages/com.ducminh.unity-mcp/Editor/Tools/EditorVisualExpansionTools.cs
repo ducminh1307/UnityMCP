@@ -279,8 +279,8 @@ namespace DucMinh.UnityMcp.Editor
             height = Mathf.Clamp(height, 16, 2048);
             var previousTarget = camera.targetTexture;
             var previousActive = RenderTexture.active;
-            var renderTexture = RenderTexture.GetTemporary(width, height, 24, includeAlpha ? RenderTextureFormat.ARGB32 : RenderTextureFormat.RGB565, RenderTextureReadWrite.sRGB);
-            var texture = new Texture2D(width, height, TextureFormat.RGBA32, false, false);
+            var renderTexture = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+            var texture = new Texture2D(width, height, includeAlpha ? TextureFormat.RGBA32 : TextureFormat.RGB24, false, false);
             try
             {
                 camera.targetTexture = renderTexture;
