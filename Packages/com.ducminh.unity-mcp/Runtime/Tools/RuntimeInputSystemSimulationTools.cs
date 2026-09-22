@@ -95,20 +95,17 @@ namespace DucMinh.UnityMcp
             {
                 var position = new Vector2(input.x.Value, input.y.Value);
                 output.operations.Add("Set pointer position to (" + position.x + ", " + position.y + ").");
-                if (!context.DryRun) QueueDelta(RequireNamedControl(mouse, mouseType, "position"), position);
             }
             if (hasScroll)
             {
                 var scroll = new Vector2(input.scrollX ?? 0f, input.scrollY ?? 0f);
                 output.operations.Add("Queue pointer scroll (" + scroll.x + ", " + scroll.y + ").");
-                if (!context.DryRun) QueueDelta(RequireNamedControl(mouse, mouseType, "scroll"), scroll);
             }
             if (hasButton)
             {
-                var property = PointerButtonProperty(input.button);
                 output.operations.Add((input.pressed.Value ? "Press " : "Release ") + input.button.Trim().ToLowerInvariant() + " mouse button.");
-                if (!context.DryRun) QueueDelta(RequireNamedControl(mouse, mouseType, property), input.pressed.Value ? 1f : 0f);
             }
+            if (!context.DryRun) QueuePointerState(mouse, mouseType, input);
             return output;
         }
 
@@ -144,6 +141,62 @@ namespace DucMinh.UnityMcp
                 case "back": return "backButton";
                 case "forward": return "forwardButton";
                 default: throw new ArgumentException("button must be left, right, middle, back, or forward.");
+            }
+        }
+
+        private static void QueuePointerState(object mouse, Type mouseType, InputSimulatePointerInput input)
+        {
+            var mouseStateType = RequireType("UnityEngine.InputSystem.LowLevel.MouseState");
+            var mouseButtonType = RequireType("UnityEngine.InputSystem.MouseButton");
+            var state = Activator.CreateInstance(mouseStateType);
+            SetField(mouseStateType, ref state, "position", input.x.HasValue
+                ? new Vector2(input.x.Value, input.y.Value)
+                : ReadControlValue(RequireNamedControl(mouse, mouseType, "position")));
+            SetField(mouseStateType, ref state, "scroll", new Vector2(input.scrollX ?? 0f, input.scrollY ?? 0f));
+
+            foreach (var button in new[] { "left", "right", "middle", "back", "forward" })
+            {
+                var pressed = string.Equals(button, input.button, StringComparison.OrdinalIgnoreCase)
+                    ? input.pressed.GetValueOrDefault()
+                    : Convert.ToSingle(ReadControlValue(RequireNamedControl(mouse, mouseType, PointerButtonProperty(button)))) >= 0.5f;
+                var mouseButton = Enum.Parse(mouseButtonType, char.ToUpperInvariant(button[0]) + button.Substring(1), true);
+                state = mouseStateType.GetMethod("WithButton", new[] { mouseButtonType, typeof(bool) })
+                    .Invoke(state, new[] { mouseButton, (object)pressed });
+            }
+            QueueState(mouse, state);
+        }
+
+        private static void SetField(Type type, ref object target, string name, object value)
+        {
+            var field = type.GetField(name, BindingFlags.Public | BindingFlags.Instance);
+            if (field == null) throw new InvalidOperationException(type.FullName + " does not expose '" + name + "'.");
+            field.SetValue(target, value);
+        }
+
+        private static object ReadControlValue(object control)
+        {
+            var method = control.GetType().GetMethod("ReadValue", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
+            if (method == null) throw new InvalidOperationException(control.GetType().FullName + " does not expose ReadValue().");
+            return method.Invoke(control, null);
+        }
+
+        private static void QueueState(object device, object state)
+        {
+            var inputSystemType = RequireType("UnityEngine.InputSystem.InputSystem");
+            var method = inputSystemType.GetMethods(BindingFlags.Public | BindingFlags.Static).FirstOrDefault(candidate =>
+            {
+                if (candidate.Name != "QueueStateEvent" || !candidate.IsGenericMethodDefinition || candidate.GetGenericArguments().Length != 1) return false;
+                var parameters = candidate.GetParameters();
+                return parameters.Length == 3 && parameters[1].ParameterType.IsGenericParameter && parameters[2].ParameterType == typeof(double);
+            });
+            if (method == null) throw new InvalidOperationException("The installed Input System does not expose the supported public QueueStateEvent API.");
+            try
+            {
+                method.MakeGenericMethod(state.GetType()).Invoke(null, new[] { device, state, (object)-1d });
+            }
+            catch (TargetInvocationException exception)
+            {
+                throw new UnityMcpValidationException("input_simulation_failed", "Input System rejected the synthetic pointer event: " + (exception.InnerException?.Message ?? exception.Message));
             }
         }
 
