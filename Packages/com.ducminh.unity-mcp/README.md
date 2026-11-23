@@ -1,109 +1,88 @@
 # Unity MCP UPM package
 
-This Unity 6 package provides the C# half of UnityMCP: a typed dynamic tool registry,
-a bearer-authenticated loopback HTTP bridge, Editor tool enablement, and an opt-in
-Development Player bridge. Production Players never start the bridge.
+`com.ducminh.unity-mcp` (`v0.2.0`) extends Unity's official **Unity CLI** (`unity`)
+and **`com.unity.pipeline`** (`1.0.1`) with **47 extension commands across 19
+non-colliding groups**, plus project-scoped MCP/rule/skill setup for Antigravity,
+Codex, and Claude Code.
 
-## Editor
+- Unity's `com.unity.pipeline` package owns command discovery (`CommandRegistry`),
+  schema generation, loopback HTTP hosting (`127.0.0.1`), and execution.
+- The official `unity` CLI handles instance discovery, direct shell execution
+  (`unity status`, `unity command`, `unity recompile`, `unity test`, `unity build`),
+  and stdio MCP hosting (`unity mcp --tool-groups`).
+- No separate Python gateway or bearer-token sidecar is required.
 
-Open **Window > UnityMCP > Tools**. Only the 20 built-in `safe-read` tools are enabled
-for a fresh project. Mutating and project-defined tools remain disabled until the local
-user enables each one. Mutating tools are dry-run by default and require `apply: true`.
-Use the **Allow Lists** page in the same window to create, select, and edit the
-project-owned Menu, Reflection, C# Command, and Batch policy ScriptableObjects.
-The UI edits those assets directly; MCP clients still cannot modify their own policy.
+## Editor window (**Window > UnityMCP > Tools**)
 
-The window is implemented with **UI Toolkit**. In addition to the tool-permission
-controls, it contains an optional **Editor-managed HTTP gateway** panel. This is a
-convenience path for clients that support Streamable HTTP; it does not replace the
-default stdio workflow. Stdio remains started and owned by the MCP client, because an
-Editor cannot safely own the client's stdin/stdout connection.
+The UI Toolkit window provides two tabs:
 
-Instance descriptors are written to the platform-local application-data directory under
-`UnityMCP/instances`. The Python gateway discovers these descriptors and communicates
-only over loopback with the generated bearer token.
+1. **Unity CLI & MCP**:
+   - Detects the `unity` CLI executable and version, and offers copyable install
+     commands (`irm https://unity.com/install.ps1 | iex` on Windows;
+     `curl -fsSL https://unity.com/install.sh | bash` on macOS/Linux) when missing.
+   - Displays live `com.unity.pipeline` server status (Running/Stopped, PID, port)
+     from `Library/Pipeline/.unity-pipeline-port` without reading or logging `evalToken`,
+     plus shortcuts to **Project Settings > Pipeline > Editor** and **Runtime**.
+   - Provides one-click project-scoped client setup:
+     - **Antigravity**: writes `.agents/mcp_config.json`, `.agents/skills/unity-mcp/`,
+       `.agents/rules/unity-mcp.md`, and the managed context block in `AGENTS.md`.
+     - **Codex**: writes `.codex/config.toml`, `.agents/skills/unity-mcp/`, and
+       `.agents/rules/unity-mcp.md`.
+     - **Claude Code**: writes `.mcp.json`, `.claude/skills/unity-mcp/`, and
+       `.claude/rules/unity-mcp.md`.
+   - All generated configs launch `unity mcp --tool-groups --project-path <projectRoot>`
+     under server key `"unity"` and contain zero bearer tokens or HTTP URLs.
+2. **Extension Commands**:
+   - Lists non-built-in `[CliGroupCommand]` and `[CliCommand]` commands discovered
+     via `TypeCache` across `com.ducminh.unity-mcp`, independent companion packages
+     (such as `com.ducminh.ui-maker`), and project scripts (filtered by search query
+     or `CommandEffect`), with copyable `unity command <group> <name>` snippets.
 
-### Optional Editor-managed HTTP gateway
+## Extension command groups (19 groups, 47 commands)
 
-Open **Window > UnityMCP > Tools** and use the **Editor-managed HTTP gateway** panel:
+- **Always available (Runtime + Editor)**: `particle` (`create`, `get`, `configure`,
+  `preview`), `physics_ext` (`get_collision_matrix`, `set_collision_matrix`, `raycast`,
+  `overlap`), `navmesh_ext` (`calculate_path`).
+- **Always available (Editor)**: `particle save_prefab`, `uitoolkit` (`scan`,
+  `edit_uxml`, `edit_uss`, `scaffold_controller`), `ugui` (`raycast`), `scene_ext`
+  (`validate`, `analyze_complexity`), `asset_ext` (`get_dependencies`, `find_references`),
+  `render_ext` (`get_settings`, `set_settings`, `generate_texture`), `visual_ext`
+  (`capture_gameobject`, `capture_multiview`, `frame_debugger_events`), `checkpoint`
+  (`create`, `list`, `diff`, `restore`).
+- **Package-gated via `versionDefines` (Editor)**: `addressables` (5), `localization` (3),
+  `terrain` (2), `sprite` (1), `tilemap` (1), `probuilder` (2), `cinemachine` (1),
+  `vfxgraph` (1), `input_actions` (2).
 
-1. Select **Start gateway**. If the Python gateway is missing, the panel shows
-   **Server not installed** and generates commands for the current platform. The
-   commands clone the repository to local application data under `UnityMCP/source`,
-   create `UnityMCP/venv`, and install the production server package in editable mode.
-2. Select **Copy install commands**, run them in a terminal, then select
-   **Retry after installation**. Unity never runs the commands or downloads code.
-   Git and Python 3.11 or newer must already be available.
-3. If you use a custom environment, choose its executable with **Browse**. Otherwise,
-   keep the recommended `UnityMCP/venv` executable path. Preferred port and MCP path
-   remain available under **Advanced gateway settings**; `/mcp` is the normal path.
-4. The panel shows `Starting`, then `Running` only after the
-   Python process has bound its endpoint.
-5. Select the matching project action for your client: **Configure Codex** writes
-   `.codex/config.toml`, **Configure Antigravity** writes `.agents/mcp_config.json`, and
-   **Configure Claude** writes `.mcp.json`. Each path is relative to this Unity project;
-   UnityMCP never writes the clients' global or user-level config. Existing unrelated
-   settings are preserved and the UnityMCP entry stays synchronized when the actual port
-   or token changes. The same action installs a managed `unity-mcp` skill at
-   `.agents/skills/unity-mcp/SKILL.md` for Codex/Antigravity or
-   `.claude/skills/unity-mcp/SKILL.md` for Claude Code, along with a managed rule at
-   `.agents/rules/unity-mcp.md` or `.claude/rules/unity-mcp.md`. Their triggers direct the
-   client to always prioritize live UnityMCP tools proactively for Unity tasks and fall back
-   to alternative methods only when MCP calls return an error or are unavailable.
-   Restart/reload the client after the first configuration; Claude Code also asks
-   you to approve a project-scoped MCP server.
-6. Use **Copy MCP config** only for manual setup. The clipboard
-   contains the Streamable HTTP URL and bearer token. Treat that copied value as a
-   password: do not commit it, log it, or share it.
+### Companion packages
 
-These project-scoped configurations are supported for trusted projects. Because their
-static `Authorization` headers contain the local bearer token, UnityMCP adds the exact
-selected path to the repository's local `.git/info/exclude` when the project is inside
-Git. This does not modify the shared `.gitignore`. Do not force-add these files. UnityMCP
-refuses to inject a bearer token into a selected config file that is already tracked.
-The generated skill and rule files contain no token and are not added to Git exclude.
-UnityMCP only updates a skill or rule bearing its managed marker and refuses to replace
-a user-authored skill or rule at the same project path.
+- **`com.ducminh.ui-maker`** is a standalone package with zero dependency on
+  `com.ducminh.unity-mcp`. When installed alongside `com.unity.pipeline`, its optional
+  `DucMinh.UiMaker.Editor.Pipeline` assembly automatically registers the **`ui_ai`**
+  command group (10 declarative uGUI commands), which is discovered automatically by
+  `unity command`, `unity mcp --tool-groups`, and the **Extension Commands** tab.
 
-The gateway launches only for this exact Editor descriptor and passes an explicit
-`--instance` value; it never silently selects another open Unity project. It binds only
-to `127.0.0.1`. The preferred port is not a promise: if it is occupied, Unity selects a
-different free loopback port and the managed Codex entry uses the actual endpoint.
-
-Each open project has its own local settings, bearer secret, Python child process, tool
-registry, and MCP endpoint. Configure a separate MCP connection for each project. Do
-not reuse Project A's copied URL/token for Project B.
-
-The token is local per user/project and is kept outside `Assets` and source control. It
-is passed to the child process through `UNITY_MCP_HTTP_TOKEN`, not the command line.
-The UI does not render it; it is written or copied only by an explicit configuration
-action. Select **Stop gateway** before **Regenerate token**, then start the gateway; an
-existing UnityMCP-managed Codex, Antigravity, and Claude entries are refreshed automatically.
-
-Unity starts the HTTP gateway with its own process ID as `--parent-pid`. The Python
-gateway watches that parent and exits after three consecutive liveness failures, avoiding
-shutdown on one transient Windows process-query error. Before a domain reload, Unity keeps
-its owned child running, verifies the recovered HTTP listener, and reattaches it after the
-bridge is ready again. If the child exits unexpectedly or its HTTP listener stops responding,
-Unity retries the same endpoint up to six times with bounded exponential backoff. A deliberate
-**Stop gateway** cancels that restart intent. Gateway settings are immutable while it is
-starting or running. On Editor quit Unity stops the child permanently, so an old gateway does
-not remain attached to a later project session.
+Supported mutating commands expose `--dry-run` (default `false`; pass `--dry-run true`
+to preview). Destructive or overwriting commands (`checkpoint restore`,
+`particle save_prefab --overwrite true`, `addressables remove_entry`, `addressables build`)
+require `--confirm true` unless `--dry-run true` is passed.
 
 ## Development Player
 
-Create `Assets/UnityMCP/Resources/UnityMcpRuntimeProfile.asset`, enable the server, and
-choose tools in the profile before making a desktop **Development Build**. A generated
-runtime manifest and linker metadata preserve typed custom tools for IL2CPP. A normal
-release build does not compile or start the bridge bootstrap.
+Runtime Pipeline availability is configured via **Project Settings > Pipeline > Runtime**
+(`ENABLE_RUNTIME_PIPELINE_DEV` / `ENABLE_RUNTIME_PIPELINE`). Because
+`DucMinh.UnityMcp.Runtime.asmdef` references only `Unity.Pipeline.Attributes` and
+`Unity.Newtonsoft.Json` (never `Unity.Pipeline` or `UnityEditor`), non-development
+Release Player builds compile cleanly with no Pipeline server included.
 
-## Custom tools
+## Custom commands
 
-Import the **Custom Tool** sample or use `custom-tool-scaffold`. A project tool is a
-static method marked with `[UnityMcpTool]`; Unity is the schema and discovery source of
-truth, so Python does not need a matching registration. Custom tools always begin
-disabled, even if their attribute requests `DefaultEnabled`.
+Import the **Custom Tool** sample (`Samples~/CustomTool/ProjectStatusTool.cs`) or
+declare a `static` method with `[CliGroupCommand]` / `[CliCommand]`, `[CliArg]`,
+`CommandContext`, and `ExitCode` (or `Task<ExitCode>`). `CommandRegistry` discovers
+it automatically after compilation.
 
-Raw `object`, `JObject`, and `JToken` contracts require an explicit
-`IUnityMcpSchemaProvider`. Typed DTOs, enums, nullable values, collections, nested DTOs,
-and common Unity value types are handled automatically.
+- Set `Effect` (`ReadOnly`, `Idempotent`, `Additive`, or `Destructive`).
+- Use `IStructuredCommandInput` (from `Unity.Pipeline`) on a DTO for structured
+  multi-field arguments.
+- Never name a `[CliArg]` `format`, `json`, `fields`, `verbose`, or `omit-nulls`,
+  and never reuse any of `com.unity.pipeline`'s 23 built-in group names.

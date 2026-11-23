@@ -841,6 +841,39 @@
     border-left-color: rgb(176, 86, 216);
 }
 
+.unity-mcp-badge--readonly {
+    color: rgb(137, 202, 255);
+    background-color: rgba(45, 120, 195, 0.19);
+    border-top-color: rgb(65, 142, 220);
+    border-right-color: rgb(65, 142, 220);
+    border-bottom-color: rgb(65, 142, 220);
+    border-left-color: rgb(65, 142, 220);
+}
+
+.unity-mcp-badge--idempotent {
+    color: rgb(126, 232, 159);
+    background-color: rgba(38, 149, 76, 0.24);
+    border-top-color: rgb(62, 184, 101);
+    border-right-color: rgb(62, 184, 101);
+    border-bottom-color: rgb(62, 184, 101);
+    border-left-color: rgb(62, 184, 101);
+}
+
+.unity-mcp-badge--additive {
+    color: rgb(255, 207, 112);
+    background-color: rgba(185, 124, 24, 0.2);
+    border-top-color: rgb(211, 151, 50);
+    border-right-color: rgb(211, 151, 50);
+    border-bottom-color: rgb(211, 151, 50);
+    border-left-color: rgb(211, 151, 50);
+}
+
+.unity-mcp-badge--assembly,
+.unity-mcp-badge--tag,
+.unity-mcp-badge--unspecified {
+    opacity: 0.78;
+}
+
 .unity-mcp-help {
     flex-direction: row;
     align-items: flex-start;

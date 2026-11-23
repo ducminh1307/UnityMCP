@@ -1,1 +1,0 @@
-"""UnityMCP gateway tests."""

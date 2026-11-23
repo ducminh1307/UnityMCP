@@ -33,14 +33,13 @@ namespace DucMinh.UnityMcp.Editor
             error = null;
             try
             {
-                if (string.IsNullOrWhiteSpace(projectRoot))
-                    throw new ArgumentException("The Unity project root is required.", nameof(projectRoot));
-
-                var fullProjectRoot = Path.GetFullPath(projectRoot);
+                var fullProjectRoot = UnityMcpProjectConfigFile.NormalizeProjectRoot(projectRoot);
                 var targetDirectory = Path.Combine(
                     fullProjectRoot,
                     RelativeSkillPath(client).Replace('/', Path.DirectorySeparatorChar));
                 skillPath = Path.Combine(targetDirectory, "SKILL.md");
+                UnityMcpProjectConfigFile.EnsureSafeProjectPath(fullProjectRoot, skillPath);
+
                 if (File.Exists(skillPath)
                     && !File.ReadAllText(skillPath).Contains(ManagedMarker))
                     throw new InvalidOperationException(
@@ -54,6 +53,8 @@ namespace DucMinh.UnityMcp.Editor
                     if (!File.Exists(sourcePath))
                         throw new FileNotFoundException("The packaged UnityMCP skill template is incomplete.", sourcePath);
                     var targetPath = Path.Combine(targetDirectory, relativeFile.Replace('/', Path.DirectorySeparatorChar));
+                    UnityMcpProjectConfigFile.EnsureSafeProjectPath(fullProjectRoot, targetPath);
+
                     var content = File.ReadAllText(sourcePath);
                     if (!File.Exists(targetPath)
                         || !string.Equals(File.ReadAllText(targetPath), content, StringComparison.Ordinal))
@@ -73,7 +74,7 @@ namespace DucMinh.UnityMcp.Editor
             try
             {
                 var skillPath = Path.Combine(
-                    Path.GetFullPath(projectRoot),
+                    UnityMcpProjectConfigFile.NormalizeProjectRoot(projectRoot),
                     RelativeSkillPath(client).Replace('/', Path.DirectorySeparatorChar),
                     "SKILL.md");
                 return File.Exists(skillPath) && File.ReadAllText(skillPath).Contains(ManagedMarker);

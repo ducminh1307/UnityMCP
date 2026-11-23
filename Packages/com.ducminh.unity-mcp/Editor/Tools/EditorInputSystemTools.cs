@@ -1,17 +1,22 @@
+#if DM_INPUTSYSTEM_PRESENT
 #pragma warning disable UAC0005 // Editor tool reflection scans currently loaded Input System types.
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using Newtonsoft.Json.Linq;
+using Unity.Pipeline.Commands;
+using Unity.Pipeline.Editor.Authoring;
 using UnityEditor;
 using UnityEngine;
 
 namespace DucMinh.UnityMcp.Editor
 {
-    [Serializable] public sealed class InputActionsGetInput { public string path; public int maxActions = 512; }
-    [Serializable] public sealed class InputBindingInfo
+    [Serializable]
+    public sealed class InputBindingInfo
     {
         public string name;
         public string id;
@@ -24,7 +29,8 @@ namespace DucMinh.UnityMcp.Editor
         public bool isPartOfComposite;
     }
 
-    [Serializable] public sealed class InputActionInfo
+    [Serializable]
+    public sealed class InputActionInfo
     {
         public string name;
         public string id;
@@ -36,7 +42,8 @@ namespace DucMinh.UnityMcp.Editor
         public bool bindingsTruncated;
     }
 
-    [Serializable] public sealed class InputActionMapInfo
+    [Serializable]
+    public sealed class InputActionMapInfo
     {
         public string name;
         public string id;
@@ -44,21 +51,24 @@ namespace DucMinh.UnityMcp.Editor
         public List<InputActionInfo> actions = new List<InputActionInfo>();
     }
 
-    [Serializable] public sealed class InputDeviceRequirementInfo
+    [Serializable]
+    public sealed class InputDeviceRequirementInfo
     {
         public string controlPath;
         public bool isOptional;
         public bool isOr;
     }
 
-    [Serializable] public sealed class InputControlSchemeInfo
+    [Serializable]
+    public sealed class InputControlSchemeInfo
     {
         public string name;
         public string bindingGroup;
         public List<InputDeviceRequirementInfo> deviceRequirements = new List<InputDeviceRequirementInfo>();
     }
 
-    [Serializable] public sealed class InputActionsGetOutput
+    [Serializable]
+    public sealed class InputActionsGetOutput
     {
         public string path;
         public string name;
@@ -68,7 +78,8 @@ namespace DucMinh.UnityMcp.Editor
         public bool truncated;
     }
 
-    [Serializable] public sealed class InputActionBindingCreateInput
+    [Serializable]
+    public sealed class InputActionBindingCreateInput
     {
         /// <summary>Input System control path, such as &lt;Keyboard&gt;/space.</summary>
         public string path;
@@ -77,21 +88,8 @@ namespace DucMinh.UnityMcp.Editor
         public string groups;
     }
 
-    [Serializable] public sealed class InputActionCreateInput
-    {
-        public string path;
-        public string map;
-        public string action;
-        /// <summary>button, value, or pass-through.</summary>
-        public string actionType = "button";
-        public string expectedControlType;
-        public string interactions;
-        public string processors;
-        public List<InputActionBindingCreateInput> bindings = new List<InputActionBindingCreateInput>();
-        public bool apply;
-    }
-
-    [Serializable] public sealed class InputActionCreateOutput
+    [Serializable]
+    public sealed class InputActionCreateOutput
     {
         public bool dryRun;
         public bool changed;
@@ -105,22 +103,64 @@ namespace DucMinh.UnityMcp.Editor
     }
 
     /// <summary>
-    /// Input Actions asset inspection and bounded action creation. This assembly never references
-    /// com.unity.inputsystem at compile time: the registry hides both tools unless the optional
-    /// InputActionAsset type is actually installed in the target Editor.
+    /// Input Actions asset inspection and bounded action creation using reflection inside
+    /// DM_INPUTSYSTEM_PRESENT so com.unity.inputsystem requires no extra assembly reference.
     /// </summary>
     public static class EditorInputSystemTools
     {
+        private const string Group = "input_actions";
         private const int MaxActions = 2048;
         private const int MaxBindingsPerAction = 128;
         private const int MaxBindingPathLength = 512;
 
-        [UnityMcpTool("input-actions-get", Description = "Read action maps, actions, bindings, and control schemes from an Input Actions asset.", Category = "audio-input", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead, RequiredType = "UnityEngine.InputSystem.InputActionAsset")]
-        public static InputActionsGetOutput InputActionsGet(InputActionsGetInput input)
+        [CliGroupCommand(
+            Group,
+            "Read action maps, actions, bindings, and control schemes from an Input Actions asset.",
+            Name = "get",
+            Effect = CommandEffect.ReadOnly,
+            Tags = new[] { "input" })]
+        internal static ExitCode Get(
+            CommandContext cmd,
+            [CliArg("path", "Project-relative path to an existing .inputactions asset under Assets/.", Required = true)] string path,
+            [CliArg("max-actions", "Maximum number of actions to return (1-2048).")] int maxActions = 512)
         {
-            if (input == null) throw new ArgumentNullException(nameof(input));
-            var limit = Math.Max(1, Math.Min(input.maxActions, MaxActions));
-            var asset = RequireInputActionsAsset(input.path, out var normalizedPath);
+            return Execute(cmd, () => GetCore(path, maxActions));
+        }
+
+        [CliGroupCommand(
+            Group,
+            "Add a typed action with simple bindings to an existing Input Actions map.",
+            Name = "create_action",
+            Effect = CommandEffect.Additive,
+            Tags = new[] { "input" })]
+        internal static ExitCode CreateAction(
+            CommandContext cmd,
+            [CliArg("path", "Project-relative path to an existing .inputactions asset under Assets/.", Required = true)] string path,
+            [CliArg("map", "Name of an existing InputActionMap in the asset.", Required = true)] string map,
+            [CliArg("action", "Name of the new InputAction to create.", Required = true)] string action,
+            [CliArg("action-type", "Action type: button, value, or pass-through.")] string actionType = "button",
+            [CliArg("expected-control-type", "Optional expected control type (e.g. Button, Vector2).")] string expectedControlType = null,
+            [CliArg("interactions", "Optional action interactions string.")] string interactions = null,
+            [CliArg("processors", "Optional action processors string.")] string processors = null,
+            [CliArg("bindings-json", "Optional JSON array of {path, interactions, processors, groups} binding objects.")] string bindingsJson = null,
+            [CliArg("dry-run", "If true, validate inputs and preview without modifying the .inputactions asset.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => CreateActionCore(
+                path,
+                map,
+                action,
+                actionType,
+                expectedControlType,
+                interactions,
+                processors,
+                ParseBindingsJson(bindingsJson),
+                dryRun));
+        }
+
+        internal static InputActionsGetOutput GetCore(string path, int maxActions = 512)
+        {
+            var limit = Math.Max(1, Math.Min(maxActions, MaxActions));
+            var asset = RequireInputActionsAsset(path, out var normalizedPath);
             var output = new InputActionsGetOutput
             {
                 path = normalizedPath,
@@ -144,6 +184,7 @@ namespace DucMinh.UnityMcp.Editor
                     mapInfo.actions.Add(ToActionInfo(action, output));
                     emittedActions++;
                 }
+
                 if (output.truncated) break;
             }
 
@@ -152,67 +193,157 @@ namespace DucMinh.UnityMcp.Editor
             return output;
         }
 
-        [UnityMcpTool("input-action-create", Description = "Add a typed action with simple bindings to an existing Input Actions map; dry-run unless apply is true.", Category = "audio-input", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = "UnityEngine.InputSystem.InputActionAsset")]
-        public static InputActionCreateOutput InputActionCreate(InputActionCreateInput input, UnityMcpContext context)
+        internal static InputActionCreateOutput CreateActionCore(
+            string path,
+            string map,
+            string action,
+            string actionType = "button",
+            string expectedControlType = null,
+            string interactions = null,
+            string processors = null,
+            List<InputActionBindingCreateInput> bindings = null,
+            bool dryRun = false)
         {
-            if (input == null) throw new ArgumentNullException(nameof(input));
-            if (context == null) throw new ArgumentNullException(nameof(context));
-            ValidateName(input.map, "map");
-            ValidateName(input.action, "action");
-            var bindings = ValidateBindings(input.bindings);
-            var asset = RequireInputActionsAsset(input.path, out var normalizedPath);
-            var map = RequireMap(asset, input.map);
+            ValidateName(map, "map");
+            ValidateName(action, "action");
+            ValidateOptionalText(expectedControlType, "expected-control-type");
+            ValidateOptionalText(interactions, "interactions");
+            ValidateOptionalText(processors, "processors");
+            var validatedBindings = ValidateBindings(bindings);
+            var asset = RequireInputActionsAsset(path, out var normalizedPath);
+            var targetMap = RequireMap(asset, map);
             EnsureActionsAreDisabled(asset);
-            if (Enumerate(ReadRequiredMember(map, "actions")).Any(action => string.Equals(ReadText(action, "name"), input.action, StringComparison.Ordinal)))
-                throw new InvalidOperationException("The Input Actions map already contains an action named '" + input.action + "'.");
+            if (Enumerate(ReadRequiredMember(targetMap, "actions")).Any(existing => string.Equals(ReadText(existing, "name"), action, StringComparison.Ordinal)))
+                throw new InvalidOperationException("The Input Actions map already contains an action named '" + action + "'.");
 
             var inputActionType = RequireType("UnityEngine.InputSystem.InputActionType");
-            var actionType = ParseActionType(inputActionType, input.actionType);
-            var addAction = RequireAddAction(map, inputActionType);
+            var parsedActionType = ParseActionType(inputActionType, actionType);
+            var addAction = RequireAddAction(targetMap, inputActionType);
             var actionTypeObject = addAction.ReturnType;
             var addBinding = RequireAddBinding(actionTypeObject);
-            var removeAction = FindRemoveAction(map, actionTypeObject);
+            var removeAction = FindRemoveAction(targetMap, actionTypeObject);
+
             var result = new InputActionCreateOutput
             {
-                dryRun = context.DryRun,
-                changed = !context.DryRun,
+                dryRun = dryRun,
+                changed = !dryRun,
                 path = normalizedPath,
-                map = input.map,
-                action = input.action,
-                bindingCount = bindings.Count,
-                rollbackSupported = !context.DryRun,
+                map = map,
+                action = action,
+                bindingCount = validatedBindings.Count,
+                rollbackSupported = !dryRun,
                 journal = new List<ChangeJournalEntry>
                 {
-                    new ChangeJournalEntry { operation = "add-input-action", after = normalizedPath + "#" + input.map + "/" + input.action }
+                    new ChangeJournalEntry { operation = "add-input-action", after = normalizedPath + "#" + map + "/" + action }
                 }
             };
-            if (context.DryRun) return result;
+            if (dryRun) return result;
 
-            object action = null;
+            object createdAction = null;
+            using (new AuthoringUndoScope("UnityMCP Add Input Action"))
+            {
+                try
+                {
+                    Undo.RecordObject((UnityEngine.Object)asset, "UnityMCP Add Input Action");
+                    createdAction = addAction.Invoke(targetMap, new object[]
+                    {
+                        action,
+                        parsedActionType,
+                        null,
+                        NormalizeOptional(interactions),
+                        NormalizeOptional(processors),
+                        NormalizeOptional(expectedControlType)
+                    });
+                    foreach (var binding in validatedBindings)
+                        addBinding.Invoke(createdAction, new object[]
+                        {
+                            binding.path,
+                            NormalizeOptional(binding.interactions),
+                            NormalizeOptional(binding.processors),
+                            NormalizeOptional(binding.groups)
+                        });
+                    EditorUtility.SetDirty((UnityEngine.Object)asset);
+                    AssetDatabase.SaveAssetIfDirty((UnityEngine.Object)asset);
+                    result.actionId = ReadText(createdAction, "id");
+                    return result;
+                }
+                catch (TargetInvocationException exception)
+                {
+                    TryRemoveAction(targetMap, removeAction, createdAction);
+                    throw new InvalidOperationException("Unity Input System rejected the requested action or binding: " + (exception.InnerException?.Message ?? exception.Message), exception.InnerException ?? exception);
+                }
+                catch
+                {
+                    TryRemoveAction(targetMap, removeAction, createdAction);
+                    throw;
+                }
+            }
+        }
+
+        internal static List<InputActionBindingCreateInput> ParseBindingsJson(string bindingsJson)
+        {
+            if (string.IsNullOrWhiteSpace(bindingsJson))
+                return new List<InputActionBindingCreateInput>();
+
+            JArray array;
             try
             {
-                Undo.RecordObject((UnityEngine.Object)asset, "UnityMCP Add Input Action");
-                action = addAction.Invoke(map, new object[]
+                if (!(JToken.Parse(bindingsJson) is JArray parsed))
+                    throw new ArgumentException("bindings-json must be a JSON array of binding objects.");
+                array = parsed;
+            }
+            catch (ArgumentException) { throw; }
+            catch (Exception ex)
+            {
+                throw new ArgumentException("bindings-json is not valid JSON: " + ex.Message, ex);
+            }
+
+            var result = new List<InputActionBindingCreateInput>(array.Count);
+            foreach (var item in array)
+            {
+                if (!(item is JObject obj))
+                    throw new ArgumentException("bindings-json entries must be JSON objects.");
+                result.Add(new InputActionBindingCreateInput
                 {
-                    input.action, actionType, null, NormalizeOptional(input.interactions), NormalizeOptional(input.processors), NormalizeOptional(input.expectedControlType)
+                    path = ReadJsonString(obj, "path"),
+                    interactions = ReadJsonString(obj, "interactions"),
+                    processors = ReadJsonString(obj, "processors"),
+                    groups = ReadJsonString(obj, "groups")
                 });
-                foreach (var binding in bindings)
-                    addBinding.Invoke(action, new object[] { binding.path, NormalizeOptional(binding.interactions), NormalizeOptional(binding.processors), NormalizeOptional(binding.groups) });
-                EditorUtility.SetDirty((UnityEngine.Object)asset);
-                AssetDatabase.SaveAssetIfDirty((UnityEngine.Object)asset);
-                result.actionId = ReadText(action, "id");
-                return result;
             }
-            catch (TargetInvocationException exception)
+
+            return result;
+        }
+
+        private static ExitCode Execute(CommandContext cmd, Func<object> action)
+        {
+            try
             {
-                TryRemoveAction(map, removeAction, action);
-                throw new InvalidOperationException("Unity Input System rejected the requested action or binding: " + (exception.InnerException?.Message ?? exception.Message), exception.InnerException ?? exception);
+                cmd.Result.Write(action());
+                return ExitCode.Success;
             }
-            catch
+            catch (TargetInvocationException ex)
             {
-                TryRemoveAction(map, removeAction, action);
-                throw;
+                var inner = ex.InnerException ?? ex;
+                cmd.Log.Error(inner.Message);
+                return inner is ArgumentException ? ExitCode.InvalidUsage : ExitCode.Failed;
             }
+            catch (ArgumentException ex)
+            {
+                cmd.Log.Error(ex.Message);
+                return ExitCode.InvalidUsage;
+            }
+            catch (Exception ex)
+            {
+                cmd.Log.Error(ex.Message);
+                return ExitCode.Failed;
+            }
+        }
+
+        private static string ReadJsonString(JObject obj, string key)
+        {
+            var token = obj[key];
+            return token == null || token.Type == JTokenType.Null ? null : token.Value<string>();
         }
 
         private static InputActionInfo ToActionInfo(object action, InputActionsGetOutput output)
@@ -234,6 +365,7 @@ namespace DucMinh.UnityMcp.Editor
                     output.truncated = true;
                     break;
                 }
+
                 result.bindings.Add(new InputBindingInfo
                 {
                     name = ReadText(binding, "name"),
@@ -247,6 +379,7 @@ namespace DucMinh.UnityMcp.Editor
                     isPartOfComposite = ReadBool(binding, "isPartOfComposite")
                 });
             }
+
             return result;
         }
 
@@ -343,6 +476,7 @@ namespace DucMinh.UnityMcp.Editor
                 ValidateOptionalText(binding.processors, "binding processors");
                 ValidateOptionalText(binding.groups, "binding groups");
             }
+
             return result;
         }
 
@@ -357,8 +491,9 @@ namespace DucMinh.UnityMcp.Editor
                 case "pass-through":
                 case "passthrough":
                 case "pass_through": enumName = "PassThrough"; break;
-                default: throw new ArgumentException("actionType must be button, value, or pass-through.");
+                default: throw new ArgumentException("action-type must be button, value, or pass-through.");
             }
+
             return Enum.Parse(enumType, enumName, true);
         }
 
@@ -398,18 +533,8 @@ namespace DucMinh.UnityMcp.Editor
 
         private static Type RequireType(string fullName)
         {
-            var type = Type.GetType(fullName, false);
-            if (type != null) return type;
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                try
-                {
-                    type = assembly.GetType(fullName, false);
-                    if (type != null) return type;
-                }
-                catch { }
-            }
-            throw new InvalidOperationException("The required Input System type is unavailable: " + fullName);
+            return EditorCommandHelpers.TryResolveOptionalType(fullName)
+                ?? throw new InvalidOperationException("The required Input System type is unavailable: " + fullName);
         }
 
         private static object ReadRequiredMember(object target, string name)
@@ -432,20 +557,19 @@ namespace DucMinh.UnityMcp.Editor
         private static string ReadText(object target, string name)
         {
             var value = ReadOptionalMember(target, name);
-            return value == null ? null : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
+            return value == null ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
         }
 
         private static bool ReadBool(object target, string name)
         {
             var value = ReadOptionalMember(target, name);
-            return value != null && Convert.ToBoolean(value, System.Globalization.CultureInfo.InvariantCulture);
+            return value != null && Convert.ToBoolean(value, CultureInfo.InvariantCulture);
         }
 
         private static List<object> Enumerate(object value)
         {
             var result = new List<object>();
-            var enumerable = value as IEnumerable;
-            if (enumerable == null) return result;
+            if (!(value is IEnumerable enumerable)) return result;
             foreach (var item in enumerable) result.Add(item);
             return result;
         }
@@ -465,3 +589,4 @@ namespace DucMinh.UnityMcp.Editor
         private static string NormalizeOptional(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 }
+#endif

@@ -12,19 +12,45 @@ namespace DucMinh.UnityMcp.Editor
     }
 
     /// <summary>
-    /// Merges UnityMCP into the workspace-scoped JSON configuration understood by Antigravity
-    /// and Claude Code. Only the named server's connection fields are owned by UnityMCP.
+    /// Merges Unity CLI stdio MCP configuration into the workspace-scoped JSON configuration
+    /// understood by Antigravity and Claude Code.
     /// </summary>
     internal static class UnityMcpJsonProjectConfig
     {
+        internal const string DefaultServerName = "unity";
         internal const string AntigravityRelativeConfigPath = ".agents/mcp_config.json";
         internal const string ClaudeRelativeConfigPath = ".mcp.json";
+
+        internal static string[] BuildMcpArgs(string projectRoot)
+        {
+            var fullProjectRoot = UnityMcpProjectConfigFile.NormalizeProjectRoot(projectRoot);
+            return new[] { "mcp", "--tool-groups", "--project-path", fullProjectRoot };
+        }
+
+        internal static string BuildSnippetJson(
+            string projectRoot,
+            string serverName = DefaultServerName,
+            string unityCommand = null)
+        {
+            var resolvedCommand = string.IsNullOrWhiteSpace(unityCommand)
+                ? UnityCliDiscovery.ResolveUnityCommand()
+                : unityCommand.Trim();
+            return Merge(string.Empty, projectRoot, serverName, resolvedCommand, UnityMcpJsonClient.Antigravity);
+        }
+
+        internal static bool TryWrite(
+            string projectRoot,
+            UnityMcpJsonClient client,
+            out string configPath,
+            out string error)
+        {
+            return TryWrite(projectRoot, DefaultServerName, null, client, out configPath, out error);
+        }
 
         internal static bool TryWrite(
             string projectRoot,
             string serverName,
-            string endpoint,
-            string bearerToken,
+            string unityCommand,
             UnityMcpJsonClient client,
             out string configPath,
             out string error)
@@ -33,15 +59,21 @@ namespace DucMinh.UnityMcp.Editor
             error = null;
             try
             {
-                ValidateInputs(projectRoot, serverName, endpoint, bearerToken);
-                var fullProjectRoot = Path.GetFullPath(projectRoot);
-                configPath = Path.Combine(fullProjectRoot, RelativeConfigPath(client).Replace('/', Path.DirectorySeparatorChar));
+                var fullProjectRoot = UnityMcpProjectConfigFile.NormalizeProjectRoot(projectRoot);
+                ValidateServerName(serverName);
+                var resolvedCommand = string.IsNullOrWhiteSpace(unityCommand)
+                    ? UnityCliDiscovery.ResolveUnityCommand()
+                    : unityCommand.Trim();
 
-                UnityMcpProjectConfigFile.PrepareLocalSecretFile(fullProjectRoot, configPath, ClientName(client));
+                configPath = Path.Combine(
+                    fullProjectRoot,
+                    RelativeConfigPath(client).Replace('/', Path.DirectorySeparatorChar));
+                UnityMcpProjectConfigFile.EnsureSafeProjectPath(fullProjectRoot, configPath);
+
                 Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? fullProjectRoot);
 
                 var existing = File.Exists(configPath) ? File.ReadAllText(configPath) : string.Empty;
-                var merged = Merge(existing, serverName, endpoint, bearerToken, client);
+                var merged = Merge(existing, fullProjectRoot, serverName, resolvedCommand, client);
                 if (!string.Equals(existing, merged, StringComparison.Ordinal))
                     UnityMcpProjectConfigFile.WriteAtomically(configPath, merged);
                 return true;
@@ -53,24 +85,45 @@ namespace DucMinh.UnityMcp.Editor
             }
         }
 
+        internal static bool IsManaged(string projectRoot, UnityMcpJsonClient client)
+        {
+            return IsManaged(projectRoot, DefaultServerName, client);
+        }
+
         internal static bool IsManaged(string projectRoot, string serverName, UnityMcpJsonClient client)
         {
             try
             {
+                if (string.IsNullOrWhiteSpace(projectRoot) || string.IsNullOrWhiteSpace(serverName))
+                    return false;
+
+                var fullProjectRoot = UnityMcpProjectConfigFile.NormalizeProjectRoot(projectRoot);
                 var path = Path.Combine(
-                    Path.GetFullPath(projectRoot),
+                    fullProjectRoot,
                     RelativeConfigPath(client).Replace('/', Path.DirectorySeparatorChar));
                 if (!File.Exists(path)) return false;
 
                 var root = JObject.Parse(File.ReadAllText(path));
                 var server = root["mcpServers"]?[serverName] as JObject;
                 if (server == null) return false;
-                var endpoint = (string)server[client == UnityMcpJsonClient.Antigravity ? "serverUrl" : "url"];
-                var authorization = (string)server["headers"]?["Authorization"];
-                return !string.IsNullOrWhiteSpace(endpoint)
-                    && endpoint.StartsWith("http://127.0.0.1:", StringComparison.Ordinal)
-                    && !string.IsNullOrWhiteSpace(authorization)
-                    && authorization.StartsWith("Bearer ", StringComparison.Ordinal);
+                if (server["serverUrl"] != null || server["url"] != null || server["httpUrl"] != null)
+                    return false;
+
+                var command = (string)server["command"];
+                if (string.IsNullOrWhiteSpace(command)) return false;
+
+                var args = server["args"] as JArray;
+                if (args == null) return false;
+
+                var expectedArgs = BuildMcpArgs(fullProjectRoot);
+                if (args.Count != expectedArgs.Length) return false;
+                for (var index = 0; index < expectedArgs.Length; index++)
+                {
+                    if (!string.Equals((string)args[index], expectedArgs[index], StringComparison.Ordinal))
+                        return false;
+                }
+
+                return true;
             }
             catch
             {
@@ -80,14 +133,15 @@ namespace DucMinh.UnityMcp.Editor
 
         internal static string Merge(
             string existing,
+            string projectRoot,
             string serverName,
-            string endpoint,
-            string bearerToken,
+            string unityCommand,
             UnityMcpJsonClient client)
         {
+            var fullProjectRoot = UnityMcpProjectConfigFile.NormalizeProjectRoot(projectRoot);
             ValidateServerName(serverName);
-            if (string.IsNullOrWhiteSpace(endpoint)) throw new ArgumentException("The MCP endpoint is required.", nameof(endpoint));
-            if (string.IsNullOrWhiteSpace(bearerToken)) throw new ArgumentException("The MCP bearer token is required.", nameof(bearerToken));
+            if (string.IsNullOrWhiteSpace(unityCommand))
+                throw new ArgumentException("The Unity CLI command is required.", nameof(unityCommand));
 
             existing = existing ?? string.Empty;
             var root = string.IsNullOrWhiteSpace(existing) ? new JObject() : JObject.Parse(existing);
@@ -117,33 +171,14 @@ namespace DucMinh.UnityMcp.Editor
                     ?? throw new InvalidDataException("The MCP server entry " + serverName + " must be a JSON object.");
             }
 
-            if (client == UnityMcpJsonClient.Antigravity)
-            {
-                server.Remove("url");
-                server.Remove("httpUrl");
-                server["serverUrl"] = endpoint;
-            }
-            else
-            {
-                server.Remove("serverUrl");
-                server.Remove("httpUrl");
-                server["type"] = "http";
-                server["url"] = endpoint;
-            }
+            server.Remove("serverUrl");
+            server.Remove("url");
+            server.Remove("httpUrl");
+            server.Remove("type");
+            server.Remove("headers");
 
-            var headersToken = server["headers"];
-            JObject headers;
-            if (headersToken == null)
-            {
-                headers = new JObject();
-                server["headers"] = headers;
-            }
-            else
-            {
-                headers = headersToken as JObject
-                    ?? throw new InvalidDataException("The MCP server headers property must be a JSON object.");
-            }
-            headers["Authorization"] = "Bearer " + bearerToken;
+            server["command"] = unityCommand.Trim();
+            server["args"] = new JArray(BuildMcpArgs(fullProjectRoot));
 
             var newline = existing.Contains("\r\n") ? "\r\n" : "\n";
             return root.ToString(Formatting.Indented).Replace("\r\n", "\n").Replace("\n", newline) + newline;
@@ -161,21 +196,15 @@ namespace DucMinh.UnityMcp.Editor
             return client == UnityMcpJsonClient.Antigravity ? "Antigravity" : "Claude";
         }
 
-        private static void ValidateInputs(string projectRoot, string serverName, string endpoint, string bearerToken)
-        {
-            if (string.IsNullOrWhiteSpace(projectRoot)) throw new ArgumentException("The Unity project root is required.", nameof(projectRoot));
-            ValidateServerName(serverName);
-            if (string.IsNullOrWhiteSpace(endpoint) || !endpoint.StartsWith("http://127.0.0.1:", StringComparison.Ordinal))
-                throw new ArgumentException("The MCP endpoint must use IPv4 loopback HTTP.", nameof(endpoint));
-            if (string.IsNullOrWhiteSpace(bearerToken)) throw new ArgumentException("The MCP bearer token is required.", nameof(bearerToken));
-        }
-
         private static void ValidateServerName(string serverName)
         {
-            if (string.IsNullOrWhiteSpace(serverName)) throw new ArgumentException("The MCP server name is required.", nameof(serverName));
+            if (string.IsNullOrWhiteSpace(serverName))
+                throw new ArgumentException("The MCP server name is required.", nameof(serverName));
             foreach (var character in serverName)
+            {
                 if (!IsAsciiLetterOrDigit(character) && character != '_' && character != '-')
                     throw new ArgumentException("The MCP server name contains unsupported characters.", nameof(serverName));
+            }
         }
 
         private static bool IsAsciiLetterOrDigit(char character)

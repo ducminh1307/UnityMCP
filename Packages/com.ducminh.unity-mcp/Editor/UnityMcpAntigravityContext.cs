@@ -3,7 +3,7 @@ using System.IO;
 
 namespace DucMinh.UnityMcp.Editor
 {
-    /// <summary>Adds UnityMCP guidance to Antigravity's persistent workspace context.</summary>
+    /// <summary>Adds Unity CLI and UnityMCP guidance to Antigravity's persistent workspace context.</summary>
     internal static class UnityMcpAntigravityContext
     {
         internal const string RelativePath = "AGENTS.md";
@@ -12,8 +12,10 @@ namespace DucMinh.UnityMcp.Editor
 
         private const string ManagedBlock = StartMarker + "\n"
             + "## UnityMCP live-Unity workflow\n\n"
-            + "For every task that queries, diagnoses, verifies, or changes Unity, invoke the appropriate project-scoped UnityMCP tool (`unity_*`) before using terminal commands, searching serialized project files, or inferring live Editor state.\n\n"
-            + "Use terminal or project-file inspection only when the UnityMCP gateway is unreachable, the required tool is unavailable, or that tool returns an error. State the reason before falling back. After a Unity-related change, use UnityMCP to check compilation, console output, or the relevant test/live state.\n"
+            + "For every task that queries, diagnoses, verifies, or changes Unity:\n\n"
+            + "- **When a shell is available**, prefer the official **Unity CLI** (`unity status`, `unity command <group> <name>`, `unity recompile`, `unity test`, `unity build`) backed by `com.unity.pipeline` and `com.ducminh.unity-mcp` extension commands before inspecting raw serialized files or inferring live Editor state.\n"
+            + "- **When using MCP** (or when shell access is unavailable), invoke the project-scoped `unity` MCP server (`unity mcp --tool-groups`).\n"
+            + "- Use project-file fallback only when no Editor/Pipeline server is running, the CLI/MCP command is unavailable, or the invocation returns an error. State the reason before falling back. After Unity changes, verify compilation (`unity recompile`), console output, or tests (`unity test`) via Unity CLI or MCP.\n"
             + EndMarker + "\n";
 
         internal static bool TryWrite(string projectRoot, out string contextPath, out string error)
@@ -22,10 +24,10 @@ namespace DucMinh.UnityMcp.Editor
             error = null;
             try
             {
-                if (string.IsNullOrWhiteSpace(projectRoot))
-                    throw new ArgumentException("The Unity project root is required.", nameof(projectRoot));
+                var fullProjectRoot = UnityMcpProjectConfigFile.NormalizeProjectRoot(projectRoot);
+                contextPath = Path.Combine(fullProjectRoot, RelativePath);
+                UnityMcpProjectConfigFile.EnsureSafeProjectPath(fullProjectRoot, contextPath);
 
-                contextPath = Path.Combine(Path.GetFullPath(projectRoot), RelativePath);
                 var existing = File.Exists(contextPath) ? File.ReadAllText(contextPath) : string.Empty;
                 var updated = UpsertManagedBlock(existing);
                 if (!string.Equals(existing, updated, StringComparison.Ordinal))
@@ -43,7 +45,7 @@ namespace DucMinh.UnityMcp.Editor
         {
             try
             {
-                var path = Path.Combine(Path.GetFullPath(projectRoot), RelativePath);
+                var path = Path.Combine(UnityMcpProjectConfigFile.NormalizeProjectRoot(projectRoot), RelativePath);
                 return File.Exists(path) && File.ReadAllText(path).Contains(StartMarker);
             }
             catch { return false; }

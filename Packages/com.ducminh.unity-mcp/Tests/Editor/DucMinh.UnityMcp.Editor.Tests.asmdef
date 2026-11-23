@@ -2,8 +2,12 @@
   "name": "DucMinh.UnityMcp.Editor.Tests",
   "rootNamespace": "DucMinh.UnityMcp.Tests",
   "references": [
+    "Unity.Pipeline.Attributes",
+    "Unity.Pipeline",
+    "Unity.Pipeline.Editor",
     "DucMinh.UnityMcp.Runtime",
-    "DucMinh.UnityMcp.Editor"
+    "DucMinh.UnityMcp.Editor",
+    "UnityEngine.UI"
   ],
   "includePlatforms": ["Editor"],
   "excludePlatforms": [],
@@ -12,7 +16,53 @@
   "precompiledReferences": ["Newtonsoft.Json.dll"],
   "autoReferenced": false,
   "defineConstraints": ["UNITY_INCLUDE_TESTS"],
-  "versionDefines": [],
+  "versionDefines": [
+    {
+      "name": "com.unity.addressables",
+      "expression": "",
+      "define": "DM_ADDRESSABLES_PRESENT"
+    },
+    {
+      "name": "com.unity.localization",
+      "expression": "",
+      "define": "DM_LOCALIZATION_PRESENT"
+    },
+    {
+      "name": "com.unity.cinemachine",
+      "expression": "",
+      "define": "DM_CINEMACHINE_PRESENT"
+    },
+    {
+      "name": "com.unity.visualeffectgraph",
+      "expression": "",
+      "define": "DM_VFXGRAPH_PRESENT"
+    },
+    {
+      "name": "com.unity.probuilder",
+      "expression": "",
+      "define": "DM_PROBUILDER_PRESENT"
+    },
+    {
+      "name": "com.unity.inputsystem",
+      "expression": "",
+      "define": "DM_INPUTSYSTEM_PRESENT"
+    },
+    {
+      "name": "com.unity.modules.terrain",
+      "expression": "",
+      "define": "DM_TERRAIN_PRESENT"
+    },
+    {
+      "name": "com.unity.2d.sprite",
+      "expression": "",
+      "define": "DM_2D_SPRITE_PRESENT"
+    },
+    {
+      "name": "com.unity.modules.tilemap",
+      "expression": "",
+      "define": "DM_TILEMAP_PRESENT"
+    }
+  ],
   "noEngineReferences": false,
   "optionalUnityReferences": ["TestAssemblies"]
 }

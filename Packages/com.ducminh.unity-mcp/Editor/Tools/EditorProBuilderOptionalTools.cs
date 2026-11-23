@@ -1,28 +1,23 @@
+#if DM_PROBUILDER_PRESENT
 #pragma warning disable UAC0005 // Editor tool reflection scans currently loaded ProBuilder types.
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using Newtonsoft.Json.Linq;
+using Unity.Pipeline.Commands;
+using Unity.Pipeline.Editor.Authoring;
+using Unity.Pipeline.Models;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 
 namespace DucMinh.UnityMcp.Editor
 {
-    [Serializable] public sealed class ProBuilderCreateInput
-    {
-        /// <summary>Only "cube" is currently supported, using ProBuilder's public GenerateCube API.</summary>
-        public string primitive = "cube";
-        public string name = "ProBuilder Cube";
-        public Vector3 size = Vector3.one;
-        public Vector3 worldPosition = Vector3.zero;
-        /// <summary>Optional loaded scene GameObject that becomes the parent.</summary>
-        public int? parentGameObjectInstanceId;
-        public bool apply;
-    }
-
-    [Serializable] public sealed class ProBuilderCreateOutput
+    [Serializable]
+    public sealed class ProBuilderCreateOutput
     {
         public bool dryRun;
         public bool created;
@@ -38,25 +33,16 @@ namespace DucMinh.UnityMcp.Editor
         public List<ChangeJournalEntry> journal = new List<ChangeJournalEntry>();
     }
 
-    [Serializable] public sealed class ProBuilderVertexPosition
+    [Serializable]
+    public sealed class ProBuilderVertexPosition
     {
         public int index;
         public Vector3 before;
         public Vector3 after;
     }
 
-    [Serializable] public sealed class ProBuilderEditInput
-    {
-        /// <summary>Instance ID of a loaded ProBuilderMesh component.</summary>
-        public int proBuilderMeshInstanceId;
-        /// <summary>Unique vertex indexes in the ProBuilderMesh positions collection; at most 256 per call.</summary>
-        public List<int> vertexIndexes = new List<int>();
-        /// <summary>Finite local-space translation applied to exactly the listed vertices.</summary>
-        public Vector3 localOffset;
-        public bool apply;
-    }
-
-    [Serializable] public sealed class ProBuilderEditOutput
+    [Serializable]
+    public sealed class ProBuilderEditOutput
     {
         public bool dryRun;
         public bool changed;
@@ -70,12 +56,13 @@ namespace DucMinh.UnityMcp.Editor
     }
 
     /// <summary>
-    /// Bounded ProBuilder integrations with no compile-time package reference. Creation is
-    /// deliberately limited to a cube, and edit is deliberately limited to translating a
-    /// bounded, validated list of local vertex indexes through the documented public API.
+    /// Bounded ProBuilder integrations using reflection inside DM_PROBUILDER_PRESENT.
+    /// Creation is limited to a cube and edit translates a bounded, validated list of local
+    /// vertex indexes through ProBuilder's public VertexPositioning API.
     /// </summary>
     public static class EditorProBuilderOptionalTools
     {
+        private const string Group = "probuilder";
         private const string ProBuilderMeshTypeName = "UnityEngine.ProBuilder.ProBuilderMesh";
         private const string ShapeGeneratorTypeName = "UnityEngine.ProBuilder.ShapeGenerator";
         private const string PivotLocationTypeName = "UnityEngine.ProBuilder.PivotLocation";
@@ -87,42 +74,95 @@ namespace DucMinh.UnityMcp.Editor
         private const float MaximumWorldCoordinate = 1000000f;
         private const float MaximumOffsetMagnitude = 100000f;
 
-        [UnityMcpTool("probuilder-create", Description = "Create one ProBuilder cube with validated dimensions, transform, and optional scene parent; dry-run unless apply is true.", Category = "probuilder", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = ShapeGeneratorTypeName)]
-        public static ProBuilderCreateOutput ProBuilderCreate(ProBuilderCreateInput input, UnityMcpContext context)
+        [CliGroupCommand(
+            Group,
+            "Create one ProBuilder cube with validated dimensions, transform, and optional scene parent.",
+            Name = "create",
+            Effect = CommandEffect.Additive,
+            Tags = new[] { "probuilder", "geometry" })]
+        internal static ExitCode Create(
+            CommandContext cmd,
+            [CliArg("primitive", "Primitive type to create (currently only 'cube').")] string primitive = "cube",
+            [CliArg("name", "Name for the created ProBuilder GameObject.")] string name = "ProBuilder Cube",
+            [CliArg("size", "Dimensions as [x,y,z], comma-separated x,y,z, or {x,y,z}. Default: 1,1,1.")] string size = null,
+            [CliArg("world-position", "World position as [x,y,z], comma-separated x,y,z, or {x,y,z}. Default: 0,0,0.")] string worldPosition = null,
+            [CliArg("parent-id", "Optional parent GameObject handle (globalId, hierarchyPath, or instanceId).")] ObjectRef parentId = null,
+            [CliArg("dry-run", "If true, validate inputs and preview without creating the mesh.")] bool dryRun = false)
         {
-            if (input == null) throw new ArgumentNullException(nameof(input));
-            var primitive = NormalizePrimitive(input.primitive);
-            var name = RequireName(input.name, "name");
-            var size = RequirePositiveFiniteVector(input.size, "size", MinimumSize, MaximumSize);
-            var position = RequireBoundedFiniteVector(input.worldPosition, "worldPosition", MaximumWorldCoordinate);
-            var parent = input.parentGameObjectInstanceId.HasValue
-                ? RequireSceneGameObject(input.parentGameObjectInstanceId.Value, "parentGameObjectInstanceId")
-                : null;
+            return Execute(cmd, () => CreateCore(
+                primitive,
+                name,
+                RuntimeCommandHelpers.ParseVector3Nullable(size, "size") ?? Vector3.one,
+                RuntimeCommandHelpers.ParseVector3Nullable(worldPosition, "world-position") ?? Vector3.zero,
+                parentId,
+                dryRun));
+        }
+
+        [CliGroupCommand(
+            Group,
+            "Translate a bounded, validated set of ProBuilderMesh local vertices using ProBuilder's VertexPositioning API.",
+            Name = "edit",
+            Effect = CommandEffect.Idempotent,
+            Tags = new[] { "probuilder", "geometry" })]
+        internal static ExitCode Edit(
+            CommandContext cmd,
+            [CliArg("probuilder-mesh-id", "Handle or instanceId of a loaded ProBuilderMesh component.", Required = true)] ObjectRef proBuilderMeshId,
+            [CliArg("vertex-indexes-json", "Vertex indexes as a JSON array (e.g. \"[0,1,2]\") or comma-separated ints (e.g. \"0,1,2\").", Required = true)] string vertexIndexesJson,
+            [CliArg("local-offset", "Local-space translation as [x,y,z], comma-separated x,y,z, or {x,y,z}.", Required = true)] string localOffset,
+            [CliArg("dry-run", "If true, validate inputs and preview vertex deltas without editing the mesh.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => EditCore(
+                proBuilderMeshId,
+                ParseVertexIndexes(vertexIndexesJson),
+                RuntimeCommandHelpers.ParseVector3(localOffset, "local-offset"),
+                dryRun));
+        }
+
+        internal static ProBuilderCreateOutput CreateCore(
+            string primitive = "cube",
+            string name = "ProBuilder Cube",
+            Vector3? size = null,
+            Vector3? worldPosition = null,
+            ObjectRef parentId = null,
+            bool dryRun = false)
+        {
+            var normalizedPrimitive = NormalizePrimitive(primitive);
+            var normalizedName = RequireName(name, "name");
+            var resolvedSize = RequirePositiveFiniteVector(size ?? Vector3.one, "size", MinimumSize, MaximumSize);
+            var resolvedPosition = RequireBoundedFiniteVector(worldPosition ?? Vector3.zero, "world-position", MaximumWorldCoordinate);
+            var parent = parentId != null && !parentId.IsEmpty ? RequireSceneGameObject(parentId, "parent-id") : null;
+
             var output = new ProBuilderCreateOutput
             {
-                dryRun = context.DryRun,
-                created = !context.DryRun,
-                primitive = primitive,
-                name = name,
+                dryRun = dryRun,
+                created = !dryRun,
+                primitive = normalizedPrimitive,
+                name = normalizedName,
                 parentGameObjectInstanceId = parent == null ? (int?)null : UnityMcpObjectId.Get(parent),
-                size = size,
-                worldPosition = position,
+                size = resolvedSize,
+                worldPosition = resolvedPosition,
                 rollbackSupported = true,
-                journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "create-probuilder-cube", after = name } }
+                journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "create-probuilder-cube", after = normalizedName } }
             };
-            if (context.DryRun) return output;
+            if (dryRun) return output;
 
-            var mesh = GenerateCube(size);
-            if (mesh == null) throw new InvalidOperationException("ProBuilder did not return a ProBuilderMesh for the new cube.");
-            var component = mesh as Component;
-            if (component == null) throw new InvalidOperationException("The installed ProBuilderMesh type is not a Unity Component.");
-            var gameObject = component.gameObject;
-            Undo.RegisterCreatedObjectUndo(gameObject, "UnityMCP Create ProBuilder Cube");
-            gameObject.name = name;
-            if (parent != null) Undo.SetTransformParent(gameObject.transform, parent.transform, "UnityMCP Set ProBuilder Cube Parent");
-            gameObject.transform.position = position;
-            EditorUtility.SetDirty(component);
-            EditorSceneManager.MarkSceneDirty(gameObject.scene);
+            object mesh;
+            Component component;
+            GameObject gameObject;
+            using (new AuthoringUndoScope("UnityMCP Create ProBuilder Cube"))
+            {
+                mesh = GenerateCube(resolvedSize);
+                if (mesh == null) throw new InvalidOperationException("ProBuilder did not return a ProBuilderMesh for the new cube.");
+                component = mesh as Component;
+                if (component == null) throw new InvalidOperationException("The installed ProBuilderMesh type is not a Unity Component.");
+                gameObject = component.gameObject;
+                Undo.RegisterCreatedObjectUndo(gameObject, "UnityMCP Create ProBuilder Cube");
+                gameObject.name = normalizedName;
+                if (parent != null) Undo.SetTransformParent(gameObject.transform, parent.transform, "UnityMCP Set ProBuilder Cube Parent");
+                gameObject.transform.position = resolvedPosition;
+                EditorUtility.SetDirty(component);
+                EditorSceneManager.MarkSceneDirty(gameObject.scene);
+            }
 
             output.gameObjectInstanceId = UnityMcpObjectId.Get(gameObject);
             output.proBuilderMeshInstanceId = UnityMcpObjectId.Get(component);
@@ -130,21 +170,30 @@ namespace DucMinh.UnityMcp.Editor
             return output;
         }
 
-        [UnityMcpTool("probuilder-edit", Description = "Translate a bounded, validated set of ProBuilderMesh local vertices using ProBuilder's public VertexPositioning API; dry-run unless apply is true.", Category = "probuilder", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = ProBuilderMeshTypeName)]
-        public static ProBuilderEditOutput ProBuilderEdit(ProBuilderEditInput input, UnityMcpContext context)
+        internal static ProBuilderEditOutput EditCore(
+            ObjectRef proBuilderMeshId,
+            List<int> vertexIndexes,
+            Vector3 localOffset,
+            bool dryRun = false)
         {
-            if (input == null) throw new ArgumentNullException(nameof(input));
-            var mesh = RequireProBuilderMesh(input.proBuilderMeshInstanceId);
-            var component = mesh as Component;
+            var mesh = RequireProBuilderMesh(proBuilderMeshId);
+            var component = (Component)mesh;
             var positions = ReadVertexPositions(mesh);
-            var indexes = RequireVertexIndexes(input.vertexIndexes, positions.Count);
-            var offset = RequireBoundedFiniteVector(input.localOffset, "localOffset", MaximumOffsetMagnitude);
-            if (offset.sqrMagnitude <= Mathf.Epsilon) throw new ArgumentException("localOffset must not be zero.");
-            var vertices = indexes.Select(index => new ProBuilderVertexPosition { index = index, before = positions[index], after = positions[index] + offset }).ToList();
+            var indexes = RequireVertexIndexes(vertexIndexes, positions.Count);
+            var offset = RequireBoundedFiniteVector(localOffset, "local-offset", MaximumOffsetMagnitude);
+            if (offset.sqrMagnitude <= Mathf.Epsilon) throw new ArgumentException("local-offset must not be zero.");
+
+            var vertices = indexes.Select(index => new ProBuilderVertexPosition
+            {
+                index = index,
+                before = positions[index],
+                after = positions[index] + offset
+            }).ToList();
+
             var output = new ProBuilderEditOutput
             {
-                dryRun = context.DryRun,
-                changed = !context.DryRun,
+                dryRun = dryRun,
+                changed = !dryRun,
                 proBuilderMeshInstanceId = UnityMcpObjectId.Get(component),
                 vertexCount = positions.Count,
                 editedVertexCount = indexes.Count,
@@ -153,16 +202,81 @@ namespace DucMinh.UnityMcp.Editor
                 rollbackSupported = true,
                 journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "translate-probuilder-vertices", after = string.Join(",", indexes) } }
             };
-            if (context.DryRun) return output;
+            if (dryRun) return output;
 
-            Undo.RecordObject(component, "UnityMCP Edit ProBuilder Vertices");
-            var meshFilter = component.GetComponent<MeshFilter>();
-            if (meshFilter != null && meshFilter.sharedMesh != null) Undo.RecordObject(meshFilter.sharedMesh, "UnityMCP Edit ProBuilder Vertices");
-            TranslateVertices(mesh, indexes, offset);
-            EditorUtility.SetDirty(component);
-            if (meshFilter != null && meshFilter.sharedMesh != null) EditorUtility.SetDirty(meshFilter.sharedMesh);
-            EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
+            using (new AuthoringUndoScope("UnityMCP Edit ProBuilder Vertices"))
+            {
+                Undo.RecordObject(component, "UnityMCP Edit ProBuilder Vertices");
+                var meshFilter = component.GetComponent<MeshFilter>();
+                if (meshFilter != null && meshFilter.sharedMesh != null) Undo.RecordObject(meshFilter.sharedMesh, "UnityMCP Edit ProBuilder Vertices");
+                TranslateVertices(mesh, indexes, offset);
+                EditorUtility.SetDirty(component);
+                if (meshFilter != null && meshFilter.sharedMesh != null) EditorUtility.SetDirty(meshFilter.sharedMesh);
+                EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
+            }
+
             return output;
+        }
+
+        internal static List<int> ParseVertexIndexes(string vertexIndexesJson)
+        {
+            if (string.IsNullOrWhiteSpace(vertexIndexesJson))
+                throw new ArgumentException("vertex-indexes-json is required.");
+
+            var trimmed = vertexIndexesJson.Trim();
+            if (trimmed.StartsWith("[", StringComparison.Ordinal))
+            {
+                JArray array;
+                try { array = JArray.Parse(trimmed); }
+                catch (Exception ex) { throw new ArgumentException("vertex-indexes-json is not a valid JSON int array: " + ex.Message, ex); }
+
+                var parsed = new List<int>(array.Count);
+                foreach (var item in array)
+                {
+                    if (item.Type != JTokenType.Integer)
+                        throw new ArgumentException("vertex-indexes-json array entries must be integers.");
+                    parsed.Add(item.Value<int>());
+                }
+
+                return parsed;
+            }
+
+            var parts = trimmed.Split(',');
+            var result = new List<int>(parts.Length);
+            foreach (var part in parts)
+            {
+                var token = part.Trim();
+                if (!int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var index))
+                    throw new ArgumentException("vertex-indexes-json contains invalid integer '" + token + "'.");
+                result.Add(index);
+            }
+
+            return result;
+        }
+
+        private static ExitCode Execute(CommandContext cmd, Func<object> action)
+        {
+            try
+            {
+                cmd.Result.Write(action());
+                return ExitCode.Success;
+            }
+            catch (TargetInvocationException ex)
+            {
+                var inner = ex.InnerException ?? ex;
+                cmd.Log.Error(inner.Message);
+                return inner is ArgumentException ? ExitCode.InvalidUsage : ExitCode.Failed;
+            }
+            catch (ArgumentException ex)
+            {
+                cmd.Log.Error(ex.Message);
+                return ExitCode.InvalidUsage;
+            }
+            catch (Exception ex)
+            {
+                cmd.Log.Error(ex.Message);
+                return ExitCode.Failed;
+            }
         }
 
         private static object GenerateCube(Vector3 size)
@@ -175,15 +289,20 @@ namespace DucMinh.UnityMcp.Editor
             return method.Invoke(null, new[] { pivot, (object)size });
         }
 
-        private static object RequireProBuilderMesh(int instanceId)
+        private static object RequireProBuilderMesh(ObjectRef handle)
         {
             var meshType = RequireType(ProBuilderMeshTypeName);
-            var target = UnityMcpEditorObjectId.Resolve(instanceId);
+            var resolved = ResolveObject(handle, "probuilder-mesh-id");
+            var target = meshType.IsInstanceOfType(resolved)
+                ? resolved
+                : (resolved as GameObject)?.GetComponent(meshType);
+
             if (target == null || !meshType.IsInstanceOfType(target))
-                throw new ArgumentException("proBuilderMeshInstanceId must identify a loaded UnityEngine.ProBuilder.ProBuilderMesh component.");
+                throw new ArgumentException("probuilder-mesh-id must identify a loaded UnityEngine.ProBuilder.ProBuilderMesh component.");
+
             var component = target as Component;
             if (component == null || !component.gameObject.scene.IsValid() || !component.gameObject.scene.isLoaded)
-                throw new ArgumentException("proBuilderMeshInstanceId must identify a ProBuilderMesh in a loaded scene.");
+                throw new ArgumentException("probuilder-mesh-id must identify a ProBuilderMesh in a loaded scene.");
             return target;
         }
 
@@ -199,6 +318,7 @@ namespace DucMinh.UnityMcp.Editor
                 if (!(position is Vector3 vector)) throw new InvalidOperationException("The ProBuilderMesh positions collection has an unexpected element type.");
                 output.Add(vector);
             }
+
             return output;
         }
 
@@ -215,13 +335,14 @@ namespace DucMinh.UnityMcp.Editor
         private static List<int> RequireVertexIndexes(List<int> input, int vertexCount)
         {
             if (input == null || input.Count == 0 || input.Count > MaximumVertexEdits)
-                throw new ArgumentException("vertexIndexes must contain between 1 and " + MaximumVertexEdits + " entries.");
+                throw new ArgumentException("vertex-indexes-json must contain between 1 and " + MaximumVertexEdits + " entries.");
             var unique = new HashSet<int>();
             foreach (var index in input)
             {
-                if (index < 0 || index >= vertexCount) throw new ArgumentException("vertexIndexes contains an index outside the ProBuilderMesh positions collection.");
-                if (!unique.Add(index)) throw new ArgumentException("vertexIndexes must not contain duplicates.");
+                if (index < 0 || index >= vertexCount) throw new ArgumentException("vertex-indexes-json contains an index outside the ProBuilderMesh positions collection.");
+                if (!unique.Add(index)) throw new ArgumentException("vertex-indexes-json must not contain duplicates.");
             }
+
             return input.OrderBy(index => index).ToList();
         }
 
@@ -256,26 +377,39 @@ namespace DucMinh.UnityMcp.Editor
 
         private static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
 
-        private static GameObject RequireSceneGameObject(int instanceId, string parameterName)
+        private static GameObject RequireSceneGameObject(ObjectRef handle, string parameterName)
         {
-            var target = UnityMcpEditorObjectId.Resolve(instanceId) as GameObject;
+            var value = ResolveObject(handle, parameterName);
+            var target = value as GameObject ?? (value as Component)?.gameObject;
             if (target == null || !target.scene.IsValid() || !target.scene.isLoaded)
                 throw new ArgumentException(parameterName + " must identify a GameObject in a loaded scene.");
             return target;
         }
 
+        private static UnityEngine.Object ResolveObject(ObjectRef handle, string paramName)
+        {
+            if (handle == null || handle.IsEmpty)
+                throw new ArgumentException(paramName + " is required.");
+
+            if (ObjectResolver.TryResolve(handle, out var obj, out var error) && obj != null)
+                return obj;
+
+            var text = handle.ToString();
+            if (!string.IsNullOrEmpty(text) && text.StartsWith("instanceId:", StringComparison.Ordinal)
+                && int.TryParse(text.Substring("instanceId:".Length), NumberStyles.Integer, CultureInfo.InvariantCulture, out var legacyId))
+            {
+                var legacy = UnityMcpEditorObjectId.Resolve(legacyId);
+                if (legacy != null) return legacy;
+            }
+
+            throw new ArgumentException(paramName + " could not be resolved: " + (error ?? "not found."));
+        }
+
         private static Type RequireType(string fullName)
         {
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                try
-                {
-                    var type = assembly.GetType(fullName, false);
-                    if (type != null) return type;
-                }
-                catch { }
-            }
-            throw new InvalidOperationException("Required optional Unity package type is unavailable: " + fullName + ".");
+            return EditorCommandHelpers.TryResolveOptionalType(fullName)
+                ?? throw new InvalidOperationException("Required optional Unity package type is unavailable: " + fullName + ".");
         }
     }
 }
+#endif

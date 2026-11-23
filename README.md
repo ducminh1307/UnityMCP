@@ -1,234 +1,170 @@
-# UnityMCP
+# UnityMCP & UI Maker
 
-UnityMCP connects an MCP client such as Codex, Antigravity, or Claude Code to a
-running Unity Editor. It combines a Unity 6 UPM package with a local Python
-gateway so an AI client can inspect and operate on live Unity state through a
-typed, permission-controlled tool registry.
+This repository hosts two decoupled, production-ready Unity 6 (`6000.0+`) UPM packages built around Unity's official **Unity CLI** (`unity`) and **`com.unity.pipeline`** (`1.0.1`):
 
-- Unity is the source of truth for tool discovery, schemas, permissions, and
-  execution.
-- Only tools implemented and enabled by the connected Editor or Development
-  Player are exposed to MCP clients.
-- Project-specific C# methods can become MCP tools without adding matching
-  Python registrations.
-- All communication stays on the local machine. Remote access is disabled by
-  design; MCP analytics are local project files only.
+1. **[`com.ducminh.unity-mcp`](Packages/com.ducminh.unity-mcp/README.md) (`v0.2.0`)** — Extends `com.unity.pipeline` with **47 Unity CLI / Pipeline extension commands across 19 non-colliding groups** plus one-click project-scoped MCP/skill/rule configuration for Antigravity, Codex, and Claude Code.
+2. **[`com.ducminh.ui-maker`](Packages/com.ducminh.ui-maker/README.md) (`v1.0.0`)** — A **100% standalone** declarative uGUI authoring system featuring a `SceneView` Overlay palette, `UI Maker Hub` (`Window > UI Maker`), `UIPrefabManifest` contracts, `UICatalogRegistry`, offscreen visual review, bundled AI Skills, and an optional `com.unity.pipeline` bridge (`ui_ai`, 10 commands) with zero dependency on `com.ducminh.unity-mcp`.
+
+### Highlights
+
+- Built directly on `com.unity.pipeline` (`[CliGroupCommand]`, `[CliArg]`, `CommandContext`, `ExitCode`, `CommandEffect`) and `unity` CLI — no custom Python gateway or bearer-token sidecar required.
+- Use **Unity CLI** directly from a shell (`unity status`, `unity command`, `unity recompile`, `unity test`, `unity build`) or connect any MCP client via `unity mcp --tool-groups --project-path <projectRoot>`.
+- Both packages are completely independent: install either package on its own, or install both together in the same Unity project.
+- All Pipeline HTTP communication stays on `127.0.0.1` loopback and is managed by `com.unity.pipeline` and the `unity` CLI.
 
 ## Requirements
 
 - Unity 6 (`6000.0` or newer).
-- Git, required when installing the Unity package from its Git URL.
-- Python 3.11 or newer, required by the gateway.
-- A desktop Unity Editor or desktop Development Player running on the same
-  machine as the gateway.
+- Official **Unity CLI** (`unity` `1.0.1` or newer, required for CLI / MCP workflows; optional when using `com.ducminh.ui-maker` purely via Unity Editor UI):
+  - Windows PowerShell: `irm https://unity.com/install.ps1 | iex`
+  - macOS / Linux: `curl -fsSL https://unity.com/install.sh | bash`
+- Git, when installing the UPM packages from Git URLs.
 
-Node.js is not required. Runtime bridging is not included in non-development
-Player builds.
+Node.js and a separate Python gateway are **not** required for runtime or Editor operation. Python 3.10+ is only used by optional repository validation scripts in `tools/` and `Packages/com.ducminh.ui-maker/AI~/Skills/`.
 
-## Install and connect
+## Install and Connect
 
-UnityMCP has two local components:
-
-| Component | Purpose | Installation |
-|---|---|---|
-| Unity client | Discovers tools and executes Unity operations | Unity Package Manager (UPM) |
-| Python gateway | Presents the Unity tools to an MCP client | Guided setup in the UnityMCP window |
-
-### 1. Install the UnityMCP client with UPM
+### 1. Install `com.ducminh.unity-mcp` via UPM
 
 #### Package Manager UI
 
 1. In Unity, open **Window > Package Management > Package Manager**.
 2. Select **+ > Install package from git URL...**.
-3. Enter this URL:
+3. Enter:
 
    ```text
    https://github.com/ducminh1307/UnityMCP.git?path=/Packages/com.ducminh.unity-mcp
    ```
 
-4. Select **Install** and wait for Unity to finish compiling.
+4. Select **Install** and wait for Unity to resolve `com.unity.pipeline` (`1.0.1`) and compile.
 
 #### Project manifest
 
-Alternatively, add the following dependency to `Packages/manifest.json` in your
-Unity project:
+Alternatively, add one or both packages to `Packages/manifest.json`:
 
 ```json
 {
   "dependencies": {
-    "com.ducminh.unity-mcp": "https://github.com/ducminh1307/UnityMCP.git?path=/Packages/com.ducminh.unity-mcp"
+    "com.ducminh.unity-mcp": "https://github.com/ducminh1307/UnityMCP.git?path=/Packages/com.ducminh.unity-mcp",
+    "com.ducminh.ui-maker": "https://github.com/ducminh1307/UnityMCP.git?path=/Packages/com.ducminh.ui-maker"
   }
 }
 ```
 
-Keep the other dependencies already present in your manifest. For reproducible
-builds, append a Git tag or full commit hash after the URL, for example
-`#<full-commit-hash>`.
+### 2. Configure your AI client from Unity (`com.ducminh.unity-mcp`)
 
-### 2. Install the Python gateway
+Open **Window > UnityMCP > Tools** inside the Unity Editor. The window provides two focused tabs:
 
-1. Open **Window > UnityMCP > Tools**.
-2. Select **Start gateway**.
-3. On a new machine, the Connection page displays **Server not installed**.
-   Select **Copy install commands**, run those commands in a terminal, then
-   return to Unity and select **Retry after installation**.
+1. **Unity CLI & MCP**:
+   - Displays `unity` CLI detection status & version (with one-click copyable install commands if missing).
+   - Shows live `com.unity.pipeline` server status (Running/Stopped, port, PID) with shortcuts to **Project Settings > Pipeline > Editor** and **Runtime**.
+   - Provides one-click project-scoped configuration for:
+     - **Antigravity**: writes `.agents/mcp_config.json`, `.agents/skills/unity-mcp/`, `.agents/rules/unity-mcp.md`, and the managed context block in `AGENTS.md`.
+     - **Codex**: writes `.codex/config.toml`, `.agents/skills/unity-mcp/`, and `.agents/rules/unity-mcp.md`.
+     - **Claude Code**: writes `.mcp.json`, `.claude/skills/unity-mcp/`, and `.claude/rules/unity-mcp.md`.
+2. **Extension Commands**: searchable catalog of discovered `[CliGroupCommand]` and `[CliCommand]` commands outside `Unity.Pipeline.*` (including effect badges, copyable `unity command <group> <name>` snippets, and automatic `TypeCache` discovery of `ui_ai` when `com.ducminh.ui-maker` is installed).
 
-UnityMCP only generates and copies the platform-specific commands; it never
-downloads or executes them automatically. The guided setup stores both the
-source checkout and virtual environment outside the Unity project:
+All generated client configs use stdio `unity mcp --tool-groups` and contain **no** bearer tokens or HTTP URLs:
 
-- `UnityMCP/source` under the operating system's local application-data folder.
-- `UnityMCP/venv`, containing the `unity-mcp` executable.
-
-For reference, the generated Windows PowerShell setup is equivalent to:
-
-```powershell
-git clone --depth 1 --branch main --single-branch 'https://github.com/ducminh1307/UnityMCP.git' "$env:LOCALAPPDATA\UnityMCP\source"
-py -3 -m venv "$env:LOCALAPPDATA\UnityMCP\venv"
-& "$env:LOCALAPPDATA\UnityMCP\venv\Scripts\python.exe" -m pip install -e "$env:LOCALAPPDATA\UnityMCP\source\server"
+```json
+{
+  "mcpServers": {
+    "unity": {
+      "command": "unity",
+      "args": [
+        "mcp",
+        "--tool-groups",
+        "--project-path",
+        "/path/to/UnityProject"
+      ]
+    }
+  }
+}
 ```
 
-If `UnityMCP/source` already exists, do not run the clone command again. On
-macOS and Linux, the Unity window generates the equivalent commands with
-`python3` and `UnityMCP/venv/bin/python` using the correct local data path.
+You can also run `unity mcp configure <client>` from a terminal (`unity mcp configure --list` shows supported global client integrations).
 
-### 3. Connect an MCP client
+### 3. Standalone Declarative UI Authoring (`com.ducminh.ui-maker` `v1.0.0`)
 
-After the gateway state changes to **Running**, select the action matching your
-client:
+`com.ducminh.ui-maker` works 100% standalone in any Unity 6 project (with or without `com.ducminh.unity-mcp`):
 
-- **Configure Codex for this project** writes `.codex/config.toml`.
-- **Configure Antigravity for this project** writes
-  `.agents/mcp_config.json`.
-- **Configure Claude for this project** writes `.mcp.json`.
+- **Editor UI**:
+  - **UI Maker Hub**: **Window > UI Maker** (or **Tools > UI Maker > UI Maker Hub**) — manage `Assets/UIMaker/ui_catalog.json` (with automatic read fallback to legacy `Assets/UnityMCP/ui_catalog.json`), `Assets/UIMaker/UICatalogRegistry.asset`, `AIMetadataConfig`, auto-scaffolding, and saved screen specs (`Assets/UI/Specs/*.ui.json`).
+  - **SceneView Overlay**: enable **UI Maker** in `SceneView` to drag-and-drop Base Prefabs onto any `Canvas` or `PrefabStage`, apply quick layout presets, scaffold manifests, save specs, or open **Tools > UI Maker > UI Preview Window**.
+  - **Bundled AI Skills**: run **Tools > UI Maker > Install UI Maker AI Skills** to install `ui-maker` and `ui-maker-manifest-authoring` into `.agents/skills`, `.agent/skills`, `.claude/skills`, and `.gemini/skills`.
+- **Optional `com.unity.pipeline` Bridge (`DucMinh.UiMaker.Editor.Pipeline`)**:
+  - Automatically activates via `versionDefines` whenever `com.unity.pipeline` is present, exposing all **10 `ui_ai` commands** (`get_ui_catalog`, `rebuild_ui_catalog`, `build_ui_from_json`, `inspect_ui`, `patch_ui_node`, `scaffold_prefab_manifest`, `preview_ui`, `list_ui_screen_specs`, `save_ui_screen_spec`, `load_ui_screen_spec`).
+- Full documentation: [UI Maker README](Packages/com.ducminh.ui-maker/README.md) and [UI Maker Standalone Guide](Packages/com.ducminh.ui-maker/Documentation~/UI_MAKER_GUIDE.md).
 
-Restart or reload the MCP client after its first configuration. Claude Code may
-also ask you to approve the project-scoped MCP server. To confirm the connection,
-ask the client to call `unity-status` for the open project.
+## Unity CLI & Extension Commands
 
-These actions modify only the current Unity project. Existing unrelated client
-settings are preserved, and no global or user-level MCP configuration is
-changed. Each action also installs a project-local `unity-mcp` skill and an
-always-on rule (e.g. at `.agents/rules/unity-mcp.md` or `.claude/rules/unity-mcp.md`)
-so the client prioritizes live UnityMCP tools for Unity tasks and falls back to
-alternative approaches only if MCP returns an error or is unavailable.
-For Antigravity, UnityMCP also upserts a managed block into root `AGENTS.md`,
-its persistent workspace context file, while preserving any existing instructions.
+Verify a running Editor and inspect available commands directly:
 
-> [!IMPORTANT]
-> The generated client configuration contains a local bearer token. UnityMCP
-> adds the exact file to the repository's local `.git/info/exclude`; do not
-> force-add, log, or share that file.
-
-## Connection modes
-
-| Mode | Transport | Started by | Recommended for |
-|---|---|---|---|
-| Editor-managed | Streamable HTTP on `127.0.0.1` | UnityMCP window | Quick project-scoped setup for Codex, Antigravity, and Claude Code |
-| Client-managed | stdio | MCP client | Clients that launch and own local MCP processes |
-
-The setup above uses the Editor-managed mode. Its endpoint is loopback-only,
-uses one token and one gateway per open Unity project, and stops when the owning
-Unity process exits. If the child gateway crashes or stops answering its local
-HTTP probe, the Editor retries the same endpoint with bounded backoff; selecting
-**Stop gateway** cancels that restart intent.
-
-Editor-managed gateways also write project-local MCP analytics to
-`Temp/UnityMcpTelemetry.jsonl`. Open **Window > UnityMCP > Tools > Analytics**
-in each Unity project to see which tools return the largest payloads, how often
-they fail, and whether responses were truncated.
-
-For an advanced client-managed stdio setup, configure the installed command in
-your MCP client:
-
-```console
-unity-mcp --instance <instance-id>
+```bash
+unity status --format json
+unity command --project-path /path/to/UnityProject
+unity command --project-path /path/to/UnityProject --query particle
+unity command --project-path /path/to/UnityProject checkpoint list --help
+unity command --project-path /path/to/UnityProject ui_ai preview_ui --help
 ```
 
-If exactly one Unity instance is running, `--instance` can be omitted. Use
-`unity-mcp list-instances` when multiple Editors or Development Players are
-open. Stdio is launched and owned by the MCP client; it is not started by the
-Unity Editor.
+`com.ducminh.unity-mcp` adds **47 commands across 19 non-colliding groups** on top of `com.unity.pipeline`'s 23 built-in groups:
 
-To start Streamable HTTP manually instead:
+- **Always available (Runtime + Editor)**: `particle` (`create`, `get`, `configure`, `preview`), `physics_ext` (`get_collision_matrix`, `set_collision_matrix`, `raycast`, `overlap`), `navmesh_ext` (`calculate_path`).
+- **Always available (Editor)**: `particle save_prefab`, `uitoolkit` (4), `ugui` (1), `scene_ext` (2), `asset_ext` (2), `render_ext` (3), `visual_ext` (3), `checkpoint` (4).
+- **Package-gated via `versionDefines` (Editor)**: `addressables` (5), `localization` (3), `terrain` (2), `sprite` (1), `tilemap` (1), `probuilder` (2), `cinemachine` (1), `vfxgraph` (1), `input_actions` (2).
+- **Companion standalone package (`com.ducminh.ui-maker` `v1.0.0`, Editor)**: adds `ui_ai` (10 commands) independently whenever both `com.ducminh.ui-maker` and `com.unity.pipeline` are installed.
 
-```console
-unity-mcp --transport streamable-http --instance <instance-id> --port 8765 --http-token <local-secret>
-```
+See the complete [Extension command reference](docs/tools.md) or the canonical [JSON catalog](docs/tool-catalog.json).
 
-See the [gateway documentation](server/README.md) for environment variables,
-parent-process monitoring, readiness events, and manual configuration details.
+## Mutation Safety & Dry-Run Contract
 
-## Tools and permissions
+- Every command declares `CommandEffect` (`ReadOnly`, `Idempotent`, `Additive`, or `Destructive`), which `unity mcp` surfaces as MCP tool hints.
+- Supported mutating commands expose `--dry-run` (default `false`); pass `--dry-run true` to validate preconditions and preview changes without mutating the scene or disk.
+- Destructive or overwriting commands (`checkpoint restore`, `particle save_prefab --overwrite true`, `addressables remove_entry`, `addressables build`) require explicit `--confirm true` unless `--dry-run true` is passed.
+- Editor scene mutations use `AuthoringUndoScope` / Undo groups for single-step Undo, and asset paths are validated against project roots.
 
-A fresh project enables only the 20 built-in `safe-read` tools. All mutating
-tools and project-defined tools require explicit local opt-in in **Window >
-UnityMCP > Tools**. Mutating tools use dry-run behavior by default and require
-`apply: true` when their contract supports applying changes.
+## Custom Project Commands
 
-The same window includes an **Allow Lists** page for creating, selecting, and
-editing the project-owned Menu, Reflection, C# Command, and Batch allowlist
-ScriptableObjects. These assets remain the policy source of truth and can only
-be changed by a local Editor user; an MCP client cannot extend its own access.
-
-The gateway advertises only tools that are implemented, valid, enabled, and in
-scope for the connected Unity process. Planned catalog entries are never exposed
-as callable MCP tools.
-
-For API-backed clients where token spend matters, set
-`UNITY_MCP_TOOL_PROFILE=minimal` or `UNITY_MCP_TOOL_PROFILE=diagnostics` on the
-gateway process to advertise a smaller task-focused tool set. Use
-`UNITY_MCP_ALLOWED_TOOLS` for an exact comma-separated allowlist. See the
-[gateway documentation](server/README.md#token-conscious-tool-profiles).
-To identify which tools produce the largest payloads, enable local JSONL
-telemetry with `UNITY_MCP_TELEMETRY_PATH` and summarize it with
-`python tools/analyze_mcp_telemetry.py <path>`. For Editor-managed gateways,
-use the **Analytics** tab in the UnityMCP window to inspect the current
-project's telemetry directly inside Unity.
-
-## Custom tools
-
-Import the package's **Custom Tool** sample or follow the
-[custom-tool guide](docs/custom-tools.md). A custom tool is a static C# method
-marked with `[UnityMcpTool]`; Unity derives its MCP schema and handles discovery.
-Custom tools always start disabled and must be enabled locally before a client
-can use them.
+Import the **Custom Tool** sample (`Samples~/CustomTool/ProjectStatusTool.cs`) or follow [Custom commands](docs/custom-tools.md). Declare any static C# method with `[CliGroupCommand]` and `CommandContext` — `CommandRegistry` discovers it automatically on recompile with no registration boilerplate.
 
 ## Development Player
 
-Runtime bridging is opt-in and limited to desktop Development Builds. Create a
-profile from **Assets > Create > UnityMCP > Development Player Runtime Profile**,
-enable the server, and select the tools to include before building. Production
-Player builds never start the bridge.
+Runtime Pipeline execution is controlled entirely by **Project Settings > Pipeline > Runtime** (`ENABLE_RUNTIME_PIPELINE_DEV` / `ENABLE_RUNTIME_PIPELINE`). Because `DucMinh.UnityMcp.Runtime.asmdef` references only `Unity.Pipeline.Attributes` and `Unity.Newtonsoft.Json`, non-development Release builds never pull in the `Unity.Pipeline` HTTP server or Roslyn interpreter. Likewise, `DucMinh.UiMaker.Runtime.asmdef` has zero external assembly references and supports all Player platforms including WebGL.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — components, lifecycle, registry, and
-  execution model.
-- [Protocol](docs/protocol.md) — authenticated Unity bridge protocol.
-- [Security](docs/security.md) — trust boundaries, tokens, and local
-  configuration.
-- [Custom tools](docs/custom-tools.md) — typed project-specific C# tools.
-- [Tool reference](docs/tools.md) — human-readable index of all built-in tools,
-  grouped by category with scope, safety, availability, and dependencies.
-- [Roadmap](docs/roadmap.md) — planned scope and constraints.
-- [Tool catalog](docs/tool-catalog.json) — canonical machine-readable catalog.
+- [Architecture](docs/architecture.md) — Unity CLI, `com.unity.pipeline`, assembly boundaries, and Editor window.
+- [Security](docs/security.md) — loopback Pipeline boundary, token-free configs, and mutation guards.
+- [Custom commands](docs/custom-tools.md) — authoring `[CliGroupCommand]` commands in Runtime or Editor.
+- [Extension command reference](docs/tools.md) — generated index of all 47 `com.ducminh.unity-mcp` extension commands across 19 groups.
+- [Tool catalog](docs/tool-catalog.json) — canonical machine-readable extension catalog for `com.ducminh.unity-mcp`.
+- [UI Maker Package README](Packages/com.ducminh.ui-maker/README.md) & [UI Maker Guide](Packages/com.ducminh.ui-maker/Documentation~/UI_MAKER_GUIDE.md) — standalone `com.ducminh.ui-maker` (`v1.0.0`) workflows, schemas, and `ui_ai` commands.
+- [UI Maker Architecture Plan](docs/UI_MAKER_ARCHITECTURE_PLAN.md) — standalone decoupling design and history.
 
-Validate the catalog from the repository root with:
+Validate the repository contracts from the root directory:
 
-```console
-python tools/validate_catalog.py
-python tools/generate_tool_reference.py --check
+```bash
+python -B tools/validate_catalog.py
+python -B tools/generate_tool_reference.py --check
+python -B Packages/com.ducminh.ui-maker/AI~/Skills/ui-maker/scripts/test_validate_ui_json.py -v
 ```
 
-## Repository layout
+Smoke-test against a running Unity Editor:
+
+```bash
+python -B tools/smoke_live.py --project-path ValidationProject
+```
+
+## Repository Layout
 
 ```text
 UnityMCP/
-|-- Packages/com.ducminh.unity-mcp/  # Unity UPM package
-|-- server/                           # Python MCP gateway
-|-- docs/                             # Architecture and reference docs
-`-- tools/                            # Repository validation utilities
+|-- Packages/com.ducminh.unity-mcp/  # Unity CLI & Pipeline extension UPM package (v0.2.0, 19 groups / 47 commands)
+|-- Packages/com.ducminh.ui-maker/   # Standalone declarative uGUI authoring UPM package (v1.0.0, optional ui_ai Pipeline bridge + AI skills)
+|-- ValidationProject/               # Unity 6 validation host project
+|-- docs/                            # Architecture, security, custom tools, UI Maker plan, and command catalog
+`-- tools/                           # Catalog validator, doc generator, and live smoke script
 ```
 
 ## License

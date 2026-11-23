@@ -15,7 +15,9 @@ namespace DucMinh.UnityMcp.Editor
             return Resources.FindObjectsOfTypeAll<Object>()
                 .FirstOrDefault(value => UnityMcpObjectId.Get(value) == legacyId);
 #else
+#pragma warning disable CS0618
             return EditorUtility.InstanceIDToObject(legacyId);
+#pragma warning restore CS0618
 #endif
         }
     }

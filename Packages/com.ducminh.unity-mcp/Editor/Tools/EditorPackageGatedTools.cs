@@ -10,36 +10,23 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
-using UnityEditor;
+using Newtonsoft.Json.Linq;
+using Unity.Pipeline.Commands;
+#if DM_TERRAIN_PRESENT || DM_2D_SPRITE_PRESENT || DM_TILEMAP_PRESENT
+using Unity.Pipeline.Editor.Authoring;
+#endif
+#if DM_TILEMAP_PRESENT
+using Unity.Pipeline.Models;
 using UnityEditor.SceneManagement;
+#endif
+using UnityEditor;
 using UnityEngine;
 
 namespace DucMinh.UnityMcp.Editor
 {
-    [Serializable] public sealed class TerrainHeightSetInput
-    {
-        public string terrainDataPath;
-        public int x;
-        public int y;
-        public int width = 1;
-        public int height = 1;
-        public List<float> values = new List<float>();
-        public bool apply;
-    }
-
-    [Serializable] public sealed class TerrainTexturePaintInput
-    {
-        public string terrainDataPath;
-        public int layer;
-        public int x;
-        public int y;
-        public int width = 1;
-        public int height = 1;
-        public List<float> values = new List<float>();
-        public bool apply;
-    }
-
-    [Serializable] public sealed class SpriteSliceRectInput
+#if DM_2D_SPRITE_PRESENT
+    [Serializable]
+    public sealed class SpriteSliceRectInput
     {
         public string name;
         public float x;
@@ -49,15 +36,11 @@ namespace DucMinh.UnityMcp.Editor
         public Vector2 pivot = new Vector2(0.5f, 0.5f);
         public string alignment;
     }
+#endif
 
-    [Serializable] public sealed class SpriteSliceInput
-    {
-        public string path;
-        public List<SpriteSliceRectInput> sprites = new List<SpriteSliceRectInput>();
-        public bool apply;
-    }
-
-    [Serializable] public sealed class TilemapCellWrite
+#if DM_TILEMAP_PRESENT
+    [Serializable]
+    public sealed class TilemapCellWrite
     {
         public int x;
         public int y;
@@ -65,16 +48,10 @@ namespace DucMinh.UnityMcp.Editor
         /// <summary>Assets-relative TileBase path. Set null or empty to clear the cell.</summary>
         public string tilePath;
     }
+#endif
 
-    [Serializable] public sealed class TilemapSetTilesInput
-    {
-        public int tilemapInstanceId;
-        public List<TilemapCellWrite> cells = new List<TilemapCellWrite>();
-        public bool apply;
-    }
-
-    [Serializable] public sealed class UiToolkitScanInput { public string path; public int limit = 200; }
-    [Serializable] public sealed class UiToolkitElementInfo
+    [Serializable]
+    public sealed class UiToolkitElementInfo
     {
         public string tag;
         public string name;
@@ -82,7 +59,8 @@ namespace DucMinh.UnityMcp.Editor
         public int depth;
     }
 
-    [Serializable] public sealed class UiToolkitScanOutput
+    [Serializable]
+    public sealed class UiToolkitScanOutput
     {
         public string path;
         public string revision;
@@ -91,30 +69,16 @@ namespace DucMinh.UnityMcp.Editor
         public bool truncated;
     }
 
-    [Serializable] public sealed class UiToolkitTextEdit
+    [Serializable]
+    public sealed class UiToolkitTextEdit
     {
         public int startOffset;
         public int endOffset;
         public string newText;
     }
 
-    [Serializable] public sealed class UiToolkitUxmlEditInput
-    {
-        public string path;
-        public string expectedRevision;
-        public List<UiToolkitTextEdit> edits = new List<UiToolkitTextEdit>();
-        public bool apply;
-    }
-
-    [Serializable] public sealed class UiToolkitUssEditInput
-    {
-        public string path;
-        public string expectedRevision;
-        public List<UiToolkitTextEdit> edits = new List<UiToolkitTextEdit>();
-        public bool apply;
-    }
-
-    [Serializable] public sealed class UiToolkitTextEditOutput
+    [Serializable]
+    public sealed class UiToolkitTextEditOutput
     {
         public bool dryRun;
         public bool changed;
@@ -125,17 +89,8 @@ namespace DucMinh.UnityMcp.Editor
         public List<ChangeJournalEntry> journal = new List<ChangeJournalEntry>();
     }
 
-    [Serializable] public sealed class UiToolkitControllerScaffoldInput
-    {
-        public string path;
-        public string className;
-        public string namespaceName;
-        public string uxmlPath;
-        public List<string> elementNames = new List<string>();
-        public bool apply;
-    }
-
-    [Serializable] public sealed class UiToolkitControllerScaffoldOutput
+    [Serializable]
+    public sealed class UiToolkitControllerScaffoldOutput
     {
         public bool dryRun;
         public bool created;
@@ -147,198 +102,174 @@ namespace DucMinh.UnityMcp.Editor
     }
 
     /// <summary>
-    /// Optional integration tools. No optional package assembly is referenced by this assembly:
-    /// attributes use RequiredType and handlers resolve optional types only after the registry has
-    /// verified that they are installed. This keeps an absent package out of tools/list entirely.
+    /// Package-gated optional integration commands (Terrain, 2D Sprite, Tilemap) using reflection
+    /// inside versionDefine guards, plus always-available UI Toolkit asset commands.
     /// </summary>
     public static class EditorPackageGatedTools
     {
-        private const int MaxTerrainPatchCells = 16384;
-        private const int MaxTilemapCells = 1024;
-        private const int MaxSpriteRects = 256;
+        private const string UiToolkitGroup = "uitoolkit";
         private const int MaxTextBytes = 1024 * 1024;
         private const int MaxTextEdits = 256;
         private static readonly Regex CSharpIdentifier = new Regex("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
-        [UnityMcpTool("terrain-height-set", Description = "Apply a bounded normalized TerrainData height patch; dry-run unless apply is true.", Category = "project-extensions", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = "UnityEngine.TerrainData")]
-        public static ChangeOutput TerrainHeightSet(TerrainHeightSetInput input, UnityMcpContext context)
-        {
-            var terrainType = RequireType("UnityEngine.TerrainData");
-            var terrainData = RequireAssetOfType(input.terrainDataPath, terrainType, "TerrainData");
-            var resolution = ReadIntProperty(terrainData, "heightmapResolution");
-            ValidatePatch(input.x, input.y, input.width, input.height, resolution, resolution, input.values, "height", 0f, 1f);
-            var patch = ToHeightPatch(input.width, input.height, input.values);
+#if DM_TERRAIN_PRESENT
+        private const string TerrainGroup = "terrain";
+        private const int MaxTerrainPatchCells = 16384;
 
-            if (!context.DryRun)
-            {
-                Undo.RecordObject((UnityEngine.Object)terrainData, "UnityMCP Set Terrain Heights");
-                InvokeExact(terrainData, "SetHeights", new[] { typeof(int), typeof(int), typeof(float[,]) }, input.x, input.y, patch);
-                EditorUtility.SetDirty((UnityEngine.Object)terrainData);
-            }
-            return Change(context, "Set " + input.width + "x" + input.height + " TerrainData height patch at (" + input.x + ", " + input.y + ").", "set-terrain-heights", input.terrainDataPath);
+        [CliGroupCommand(
+            TerrainGroup,
+            "Apply a bounded normalized TerrainData height patch.",
+            Name = "set_height",
+            Effect = CommandEffect.Idempotent,
+            Tags = new[] { "terrain" })]
+        internal static ExitCode TerrainHeightSet(
+            CommandContext cmd,
+            [CliArg("terrain-data-path", "Project-relative path to an existing TerrainData asset under Assets/.", Required = true)] string terrainDataPath,
+            [CliArg("x", "Starting X sample coordinate.")] int x = 0,
+            [CliArg("y", "Starting Y sample coordinate.")] int y = 0,
+            [CliArg("width", "Patch width in samples.")] int width = 1,
+            [CliArg("height", "Patch height in samples.")] int height = 1,
+            [CliArg("values-json", "Row-major normalized heights [0..1] as a JSON array string.")] string valuesJson = null,
+            [CliArg("values", "Row-major normalized heights [0..1] as a JSON array or comma-separated floats.")] string values = null,
+            [CliArg("dry-run", "If true, validate bounds and heights without modifying TerrainData.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => TerrainHeightSetCore(
+                terrainDataPath, x, y, width, height, ParseFloatValues(valuesJson, values), dryRun));
         }
 
-        [UnityMcpTool("terrain-texture-paint", Description = "Apply a bounded normalized TerrainData alphamap layer patch; dry-run unless apply is true.", Category = "project-extensions", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = "UnityEngine.TerrainData")]
-        public static ChangeOutput TerrainTexturePaint(TerrainTexturePaintInput input, UnityMcpContext context)
+        [CliGroupCommand(
+            TerrainGroup,
+            "Apply a bounded normalized TerrainData alphamap layer patch.",
+            Name = "paint_texture",
+            Effect = CommandEffect.Idempotent,
+            Tags = new[] { "terrain" })]
+        internal static ExitCode TerrainTexturePaint(
+            CommandContext cmd,
+            [CliArg("terrain-data-path", "Project-relative path to an existing TerrainData asset under Assets/.", Required = true)] string terrainDataPath,
+            [CliArg("layer", "Alphamap layer index to paint.")] int layer = 0,
+            [CliArg("x", "Starting X alphamap coordinate.")] int x = 0,
+            [CliArg("y", "Starting Y alphamap coordinate.")] int y = 0,
+            [CliArg("width", "Patch width in alphamap samples.")] int width = 1,
+            [CliArg("height", "Patch height in alphamap samples.")] int height = 1,
+            [CliArg("values-json", "Row-major normalized layer weights [0..1] as a JSON array string.")] string valuesJson = null,
+            [CliArg("values", "Row-major normalized layer weights [0..1] as a JSON array or comma-separated floats.")] string values = null,
+            [CliArg("dry-run", "If true, validate bounds and weights without modifying TerrainData.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => TerrainTexturePaintCore(
+                terrainDataPath, layer, x, y, width, height, ParseFloatValues(valuesJson, values), dryRun));
+        }
+
+        internal static EditorChangeOutput TerrainHeightSetCore(
+            string terrainDataPath,
+            int x,
+            int y,
+            int width,
+            int height,
+            List<float> values,
+            bool dryRun = false)
         {
             var terrainType = RequireType("UnityEngine.TerrainData");
-            var terrainData = RequireAssetOfType(input.terrainDataPath, terrainType, "TerrainData");
+            var terrainData = RequireAssetOfType(terrainDataPath, terrainType, "TerrainData", out var normalizedPath);
+            var resolution = ReadIntProperty(terrainData, "heightmapResolution");
+            ValidatePatch(x, y, width, height, resolution, resolution, values, "height", 0f, 1f);
+            var patch = ToHeightPatch(width, height, values);
+
+            if (!dryRun)
+            {
+                using (new AuthoringUndoScope("UnityMCP Set Terrain Heights"))
+                {
+                    Undo.RecordObject((UnityEngine.Object)terrainData, "UnityMCP Set Terrain Heights");
+                    InvokeExact(terrainData, "SetHeights", new[] { typeof(int), typeof(int), typeof(float[,]) }, x, y, patch);
+                    EditorUtility.SetDirty((UnityEngine.Object)terrainData);
+                }
+            }
+
+            return Change(
+                dryRun,
+                "Set " + width + "x" + height + " TerrainData height patch at (" + x + ", " + y + ").",
+                "set-terrain-heights",
+                normalizedPath,
+                normalizedPath);
+        }
+
+        internal static EditorChangeOutput TerrainTexturePaintCore(
+            string terrainDataPath,
+            int layer,
+            int x,
+            int y,
+            int width,
+            int height,
+            List<float> values,
+            bool dryRun = false)
+        {
+            var terrainType = RequireType("UnityEngine.TerrainData");
+            var terrainData = RequireAssetOfType(terrainDataPath, terrainType, "TerrainData", out var normalizedPath);
             var widthLimit = ReadIntProperty(terrainData, "alphamapWidth");
             var heightLimit = ReadIntProperty(terrainData, "alphamapHeight");
             var layerCount = ReadIntProperty(terrainData, "alphamapLayers");
-            if (input.layer < 0 || input.layer >= layerCount) throw new ArgumentException("layer must identify an existing TerrainData alphamap layer.");
-            ValidatePatch(input.x, input.y, input.width, input.height, widthLimit, heightLimit, input.values, "alphamap weight", 0f, 1f);
-            var alphamaps = (float[,,])InvokeExact(terrainData, "GetAlphamaps", new[] { typeof(int), typeof(int), typeof(int), typeof(int) }, input.x, input.y, input.width, input.height);
-            ApplyLayerWeights(alphamaps, input.layer, input.values);
+            if (layer < 0 || layer >= layerCount)
+                throw new ArgumentException("layer must identify an existing TerrainData alphamap layer.");
 
-            if (!context.DryRun)
+            ValidatePatch(x, y, width, height, widthLimit, heightLimit, values, "alphamap weight", 0f, 1f);
+            var alphamaps = (float[,,])InvokeExact(terrainData, "GetAlphamaps", new[] { typeof(int), typeof(int), typeof(int), typeof(int) }, x, y, width, height);
+            ApplyLayerWeights(alphamaps, layer, values);
+
+            if (!dryRun)
             {
-                Undo.RecordObject((UnityEngine.Object)terrainData, "UnityMCP Paint Terrain Texture");
-                InvokeExact(terrainData, "SetAlphamaps", new[] { typeof(int), typeof(int), typeof(float[,,]) }, input.x, input.y, alphamaps);
-                EditorUtility.SetDirty((UnityEngine.Object)terrainData);
-            }
-            return Change(context, "Paint " + input.width + "x" + input.height + " TerrainData alphamap patch for layer " + input.layer + ".", "paint-terrain-texture", input.terrainDataPath);
-        }
-
-        [UnityMcpTool("sprite-slice", Description = "Update validated existing Sprite Editor rectangles on a TextureImporter; dry-run unless apply is true. New rectangles must first be created in Unity's Sprite Editor.", Category = "project-extensions", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = "UnityEditor.U2D.Sprites.SpriteDataProviderFactories")]
-        public static ChangeOutput SpriteSlice(SpriteSliceInput input, UnityMcpContext context)
-        {
-            var path = NormalizeExistingAssetPath(input.path, ".png");
-            var importer = AssetImporter.GetAtPath(path);
-            if (importer == null || !string.Equals(importer.GetType().FullName, "UnityEditor.TextureImporter", StringComparison.Ordinal))
-                throw new ArgumentException("path must identify a TextureImporter-backed PNG asset.");
-            var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
-            if (texture == null) throw new ArgumentException("The texture asset could not be loaded.");
-            var requested = input.sprites ?? new List<SpriteSliceRectInput>();
-            if (requested.Count == 0 || requested.Count > MaxSpriteRects) throw new ArgumentException("sprites must contain between 1 and " + MaxSpriteRects + " items.");
-            if (requested.Any(value => value == null || string.IsNullOrWhiteSpace(value.name))) throw new ArgumentException("Every sprite rect must have a name.");
-            if (requested.Select(value => value.name).Distinct(StringComparer.Ordinal).Count() != requested.Count) throw new ArgumentException("Sprite rect names must be unique.");
-
-            var provider = GetSpriteDataProvider(importer);
-            var existing = ReadSpriteRects(provider);
-            if (existing.Count == 0)
-                throw new InvalidOperationException("The texture has no existing Sprite Editor rectangles. Create initial slices in Unity's Sprite Editor before using this bounded update tool.");
-            var byName = existing.ToDictionary(value => Convert.ToString(ReadMember(value, "name")) ?? string.Empty, StringComparer.Ordinal);
-            foreach (var slice in requested)
-            {
-                ValidateSpriteRect(slice, texture.width, texture.height);
-                if (!byName.TryGetValue(slice.name, out var rectangle))
-                    throw new ArgumentException("Sprite rect '" + slice.name + "' does not exist. This tool intentionally does not create new sprite IDs.");
-                SetMember(rectangle, "rect", new Rect(slice.x, slice.y, slice.width, slice.height));
-                SetMember(rectangle, "pivot", slice.pivot);
-                if (!string.IsNullOrWhiteSpace(slice.alignment)) SetEnumMember(rectangle, "alignment", slice.alignment);
-            }
-
-            if (!context.DryRun)
-            {
-                Undo.RecordObject(importer, "UnityMCP Update Sprite Slices");
-                SetEnumMember(importer, "textureType", "Sprite");
-                SetEnumMember(importer, "spriteImportMode", "Multiple");
-                WriteSpriteRects(provider, existing);
-                InvokeByName(provider, "Apply");
-                var saveAndReimport = importer.GetType().GetMethod("SaveAndReimport", BindingFlags.Public | BindingFlags.Instance);
-                if (saveAndReimport == null) throw new InvalidOperationException("This Unity TextureImporter does not expose SaveAndReimport.");
-                saveAndReimport.Invoke(importer, null);
-            }
-            return Change(context, "Update " + requested.Count + " existing Sprite Editor rectangle(s) in '" + path + "'.", "set-sprite-rectangles", path);
-        }
-
-        [UnityMcpTool("tilemap-set-tiles", Description = "Set or clear a bounded set of Tilemap cells from stable TileBase asset paths; dry-run unless apply is true.", Category = "project-extensions", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = "UnityEngine.Tilemaps.Tilemap")]
-        public static ChangeOutput TilemapSetTiles(TilemapSetTilesInput input, UnityMcpContext context)
-        {
-            var tilemapType = RequireType("UnityEngine.Tilemaps.Tilemap");
-            var tileBaseType = RequireType("UnityEngine.Tilemaps.TileBase");
-            var target = UnityMcpEditorObjectId.Resolve(input.tilemapInstanceId);
-            if (target == null || !tilemapType.IsInstanceOfType(target)) throw new ArgumentException("tilemapInstanceId must identify a loaded Tilemap component.");
-            var cells = input.cells ?? new List<TilemapCellWrite>();
-            if (cells.Count == 0 || cells.Count > MaxTilemapCells) throw new ArgumentException("cells must contain between 1 and " + MaxTilemapCells + " entries.");
-            if (cells.Any(cell => cell == null)) throw new ArgumentException("cells may not contain null entries.");
-            var duplicates = new HashSet<string>(StringComparer.Ordinal);
-            var resolved = new List<KeyValuePair<Vector3Int, UnityEngine.Object>>();
-            foreach (var cell in cells)
-            {
-                var key = cell.x + ":" + cell.y + ":" + cell.z;
-                if (!duplicates.Add(key)) throw new ArgumentException("Each Tilemap coordinate may occur only once.");
-                UnityEngine.Object tile = null;
-                if (!string.IsNullOrWhiteSpace(cell.tilePath))
+                using (new AuthoringUndoScope("UnityMCP Paint Terrain Texture"))
                 {
-                    var tilePath = NormalizeExistingAssetPath(cell.tilePath, null);
-                    tile = AssetDatabase.LoadAssetAtPath(tilePath, tileBaseType);
-                    if (tile == null) throw new ArgumentException("tilePath must identify a TileBase asset: " + cell.tilePath);
+                    Undo.RecordObject((UnityEngine.Object)terrainData, "UnityMCP Paint Terrain Texture");
+                    InvokeExact(terrainData, "SetAlphamaps", new[] { typeof(int), typeof(int), typeof(float[,,]) }, x, y, alphamaps);
+                    EditorUtility.SetDirty((UnityEngine.Object)terrainData);
                 }
-                resolved.Add(new KeyValuePair<Vector3Int, UnityEngine.Object>(new Vector3Int(cell.x, cell.y, cell.z), tile));
             }
-            var setTile = tilemapType.GetMethod("SetTile", BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(Vector3Int), tileBaseType }, null);
-            if (setTile == null) throw new InvalidOperationException("The installed Tilemap API does not expose SetTile(Vector3Int, TileBase).");
 
-            if (!context.DryRun)
+            return Change(
+                dryRun,
+                "Paint " + width + "x" + height + " TerrainData alphamap patch for layer " + layer + ".",
+                "paint-terrain-texture",
+                normalizedPath,
+                normalizedPath);
+        }
+
+        internal static List<float> ParseFloatValues(string valuesJson, string values)
+        {
+            var hasJson = !string.IsNullOrWhiteSpace(valuesJson);
+            var hasValues = !string.IsNullOrWhiteSpace(values);
+            if (!hasJson && !hasValues)
+                throw new ArgumentException("Either --values-json or --values is required.");
+            if (hasJson && hasValues)
+                throw new ArgumentException("Specify either --values-json or --values, not both.");
+
+            var raw = (hasJson ? valuesJson : values).Trim();
+            if (raw.StartsWith("[", StringComparison.Ordinal))
             {
-                Undo.RecordObject(target, "UnityMCP Set Tilemap Tiles");
-                foreach (var item in resolved) setTile.Invoke(target, new object[] { item.Key, item.Value });
-                EditorUtility.SetDirty(target);
-                if (target is Component component && component.gameObject.scene.IsValid()) EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
+                JArray array;
+                try { array = JArray.Parse(raw); }
+                catch (Exception ex) { throw new ArgumentException("values must be a valid JSON float array: " + ex.Message, ex); }
+
+                var parsed = new List<float>(array.Count);
+                foreach (var item in array)
+                {
+                    if (item.Type != JTokenType.Integer && item.Type != JTokenType.Float)
+                        throw new ArgumentException("values JSON array entries must be numbers.");
+                    parsed.Add(item.Value<float>());
+                }
+
+                return parsed;
             }
-            return Change(context, "Set or clear " + resolved.Count + " Tilemap cell(s).", "set-tilemap-cells", input.tilemapInstanceId.ToString(CultureInfo.InvariantCulture));
-        }
 
-        [UnityMcpTool("uitoolkit-scan", Description = "Inspect a bounded UI Toolkit UXML document tree and its declared style sheet sources.", Category = "ui", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead, RequiredType = "UnityEngine.UIElements.VisualTreeAsset")]
-        public static UiToolkitScanOutput UiToolkitScan(UiToolkitScanInput input)
-        {
-            var path = RequireUiToolkitAsset(input.path, ".uxml", "UnityEngine.UIElements.VisualTreeAsset");
-            var source = ReadUtf8Source(ToFullPath(path));
-            var output = ScanUxml(source.text, Math.Max(1, Math.Min(1000, input.limit)));
-            output.path = path;
-            output.revision = Revision(source.bytes);
-            return output;
-        }
-
-        [UnityMcpTool("uitoolkit-uxml-edit", Description = "Apply revision-checked bounded text edits to a valid UXML asset; dry-run unless apply is true.", Category = "ui", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = "UnityEngine.UIElements.VisualTreeAsset")]
-        public static UiToolkitTextEditOutput UiToolkitUxmlEdit(UiToolkitUxmlEditInput input, UnityMcpContext context)
-        {
-            var path = RequireUiToolkitAsset(input.path, ".uxml", "UnityEngine.UIElements.VisualTreeAsset");
-            return ApplyUiToolkitTextEdits(path, input.expectedRevision, input.edits, context, true);
-        }
-
-        [UnityMcpTool("uitoolkit-uss-edit", Description = "Apply revision-checked bounded text edits to a syntactically balanced USS asset; dry-run unless apply is true.", Category = "ui", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = "UnityEngine.UIElements.StyleSheet")]
-        public static UiToolkitTextEditOutput UiToolkitUssEdit(UiToolkitUssEditInput input, UnityMcpContext context)
-        {
-            var path = RequireUiToolkitAsset(input.path, ".uss", "UnityEngine.UIElements.StyleSheet");
-            return ApplyUiToolkitTextEdits(path, input.expectedRevision, input.edits, context, false);
-        }
-
-        [UnityMcpTool("uitoolkit-controller-scaffold", Description = "Scaffold a bounded UI Toolkit MonoBehaviour controller with named VisualElement bindings; dry-run unless apply is true.", Category = "ui", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = "UnityEngine.UIElements.VisualTreeAsset")]
-        public static UiToolkitControllerScaffoldOutput UiToolkitControllerScaffold(UiToolkitControllerScaffoldInput input, UnityMcpContext context)
-        {
-            var uxmlPath = RequireUiToolkitAsset(input.uxmlPath, ".uxml", "UnityEngine.UIElements.VisualTreeAsset");
-            if (string.IsNullOrWhiteSpace(input.className) || !CSharpIdentifier.IsMatch(input.className)) throw new ArgumentException("className must be a valid C# identifier.");
-            if (!string.IsNullOrWhiteSpace(input.namespaceName)) ValidateNamespace(input.namespaceName);
-            var bindings = input.elementNames ?? new List<string>();
-            if (bindings.Count > 64 || bindings.Any(value => string.IsNullOrWhiteSpace(value) || !CSharpIdentifier.IsMatch(value)))
-                throw new ArgumentException("elementNames may contain at most 64 non-empty C# identifiers.");
-            if (bindings.Distinct(StringComparer.Ordinal).Count() != bindings.Count) throw new ArgumentException("elementNames must be unique.");
-            var path = NormalizeCreatableAssetPath(input.path, ".cs");
-            var fullPath = ToFullPath(path);
-            if (File.Exists(fullPath) || AssetDatabase.LoadMainAssetAtPath(path) != null) throw new InvalidOperationException("The controller path already exists.");
-            var parent = Path.GetDirectoryName(fullPath);
-            if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent)) throw new ArgumentException("The controller target folder must already exist under Assets.");
-            EnsureNoReparsePoint(AssetsRoot, parent);
-            var contents = BuildControllerSource(input.className, input.namespaceName, bindings);
-
-            if (!context.DryRun)
+            var parts = raw.Split(',');
+            var result = new List<float>(parts.Length);
+            foreach (var part in parts)
             {
-                File.WriteAllBytes(fullPath, EncodeUtf8(contents, false));
-                AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceSynchronousImport);
+                var token = part.Trim();
+                if (!float.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
+                    throw new ArgumentException("values contains invalid float '" + token + "'.");
+                result.Add(number);
             }
-            return new UiToolkitControllerScaffoldOutput
-            {
-                dryRun = context.DryRun,
-                created = !context.DryRun,
-                path = path,
-                className = input.className,
-                uxmlPath = uxmlPath,
-                rollbackSupported = false,
-                journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "create-uitoolkit-controller", after = path } }
-            };
+
+            return result;
         }
 
         private static void ValidatePatch(int x, int y, int width, int height, int maxWidth, int maxHeight, List<float> values, string valueName, float minimum, float maximum)
@@ -377,6 +308,7 @@ namespace DucMinh.UnityMcp.Editor
                         alphamaps[row, column, 0] = 1f;
                         continue;
                     }
+
                     var otherTotal = 0f;
                     for (var layer = 0; layer < layers; layer++) if (layer != targetLayer) otherTotal += alphamaps[row, column, layer];
                     alphamaps[row, column, targetLayer] = target;
@@ -392,6 +324,172 @@ namespace DucMinh.UnityMcp.Editor
                     }
                 }
             }
+        }
+
+        private static object RequireAssetOfType(string path, Type type, string displayName, out string normalizedPath)
+        {
+            normalizedPath = NormalizeExistingAssetPath(path, null);
+            var asset = AssetDatabase.LoadAssetAtPath(normalizedPath, type);
+            if (asset == null) throw new ArgumentException("terrain-data-path must identify a " + displayName + " asset.");
+            return asset;
+        }
+
+        private static int ReadIntProperty(object target, string name) => Convert.ToInt32(ReadMember(target, name), CultureInfo.InvariantCulture);
+
+        private static object InvokeExact(object target, string name, Type[] parameterTypes, params object[] arguments)
+        {
+            var method = target.GetType().GetMethod(name, BindingFlags.Public | BindingFlags.Instance, null, parameterTypes, null);
+            if (method == null) throw new InvalidOperationException(target.GetType().FullName + " does not expose the expected " + name + " overload.");
+            return method.Invoke(target, arguments);
+        }
+#endif
+
+#if DM_2D_SPRITE_PRESENT
+        private const string SpriteGroup = "sprite";
+        private const int MaxSpriteRects = 256;
+
+        [CliGroupCommand(
+            SpriteGroup,
+            "Update validated existing Sprite Editor rectangles on a TextureImporter. New rectangles must first be created in Unity's Sprite Editor.",
+            Name = "slice",
+            Effect = CommandEffect.Idempotent,
+            Tags = new[] { "sprite", "2d" })]
+        internal static ExitCode SpriteSlice(
+            CommandContext cmd,
+            [CliArg("path", "Project-relative path to an existing .png TextureImporter asset under Assets/.", Required = true)] string path,
+            [CliArg("sprites-json", "JSON array of {name, x, y, width, height, pivot, alignment} sprite rect updates.", Required = true)] string spritesJson,
+            [CliArg("dry-run", "If true, validate sprite rects without modifying the importer.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => SpriteSliceCore(path, ParseSpriteRectsJson(spritesJson), dryRun));
+        }
+
+        internal static EditorChangeOutput SpriteSliceCore(
+            string path,
+            List<SpriteSliceRectInput> sprites,
+            bool dryRun = false)
+        {
+            var normalizedPath = NormalizeExistingAssetPath(path, ".png");
+            var importer = AssetImporter.GetAtPath(normalizedPath);
+            if (importer == null || !string.Equals(importer.GetType().FullName, "UnityEditor.TextureImporter", StringComparison.Ordinal))
+                throw new ArgumentException("path must identify a TextureImporter-backed PNG asset.");
+
+            var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(normalizedPath);
+            if (texture == null) throw new ArgumentException("The texture asset could not be loaded.");
+
+            var requested = sprites ?? new List<SpriteSliceRectInput>();
+            if (requested.Count == 0 || requested.Count > MaxSpriteRects) throw new ArgumentException("sprites must contain between 1 and " + MaxSpriteRects + " items.");
+            if (requested.Any(value => value == null || string.IsNullOrWhiteSpace(value.name))) throw new ArgumentException("Every sprite rect must have a name.");
+            if (requested.Select(value => value.name).Distinct(StringComparer.Ordinal).Count() != requested.Count) throw new ArgumentException("Sprite rect names must be unique.");
+
+            var provider = GetSpriteDataProvider(importer);
+            var existing = ReadSpriteRects(provider);
+            if (existing.Count == 0)
+                throw new InvalidOperationException("The texture has no existing Sprite Editor rectangles. Create initial slices in Unity's Sprite Editor before using this bounded update tool.");
+
+            var byName = existing.ToDictionary(value => Convert.ToString(ReadMember(value, "name")) ?? string.Empty, StringComparer.Ordinal);
+            foreach (var slice in requested)
+            {
+                ValidateSpriteRect(slice, texture.width, texture.height);
+                if (!byName.TryGetValue(slice.name, out var rectangle))
+                    throw new ArgumentException("Sprite rect '" + slice.name + "' does not exist. This tool intentionally does not create new sprite IDs.");
+                SetMember(rectangle, "rect", new Rect(slice.x, slice.y, slice.width, slice.height));
+                SetMember(rectangle, "pivot", slice.pivot);
+                if (!string.IsNullOrWhiteSpace(slice.alignment)) SetEnumMember(rectangle, "alignment", slice.alignment);
+            }
+
+            if (!dryRun)
+            {
+                using (new AuthoringUndoScope("UnityMCP Update Sprite Slices"))
+                {
+                    Undo.RecordObject(importer, "UnityMCP Update Sprite Slices");
+                    SetEnumMember(importer, "textureType", "Sprite");
+                    SetEnumMember(importer, "spriteImportMode", "Multiple");
+                    WriteSpriteRects(provider, existing);
+                    InvokeByName(provider, "Apply");
+                    var saveAndReimport = importer.GetType().GetMethod("SaveAndReimport", BindingFlags.Public | BindingFlags.Instance);
+                    if (saveAndReimport == null) throw new InvalidOperationException("This Unity TextureImporter does not expose SaveAndReimport.");
+                    saveAndReimport.Invoke(importer, null);
+                }
+            }
+
+            return Change(
+                dryRun,
+                "Update " + requested.Count + " existing Sprite Editor rectangle(s) in '" + normalizedPath + "'.",
+                "set-sprite-rectangles",
+                normalizedPath,
+                normalizedPath);
+        }
+
+        internal static List<SpriteSliceRectInput> ParseSpriteRectsJson(string spritesJson)
+        {
+            if (string.IsNullOrWhiteSpace(spritesJson))
+                throw new ArgumentException("sprites-json is required.");
+
+            JArray array;
+            try
+            {
+                if (!(JToken.Parse(spritesJson) is JArray parsed))
+                    throw new ArgumentException("sprites-json must be a JSON array of sprite rectangles.");
+                array = parsed;
+            }
+            catch (ArgumentException) { throw; }
+            catch (Exception ex)
+            {
+                throw new ArgumentException("sprites-json is not valid JSON: " + ex.Message, ex);
+            }
+
+            var result = new List<SpriteSliceRectInput>(array.Count);
+            foreach (var item in array)
+            {
+                if (!(item is JObject obj))
+                    throw new ArgumentException("sprites-json entries must be JSON objects.");
+
+                result.Add(new SpriteSliceRectInput
+                {
+                    name = ReadJsonString(obj, "name"),
+                    x = ReadJsonRequiredFloat(obj, "x"),
+                    y = ReadJsonRequiredFloat(obj, "y"),
+                    width = ReadJsonRequiredFloat(obj, "width"),
+                    height = ReadJsonRequiredFloat(obj, "height"),
+                    pivot = ReadJsonPivot(obj),
+                    alignment = ReadJsonString(obj, "alignment")
+                });
+            }
+
+            return result;
+        }
+
+        private static float ReadJsonRequiredFloat(JObject obj, string key)
+        {
+            var token = obj[key];
+            if (token == null || (token.Type != JTokenType.Integer && token.Type != JTokenType.Float))
+                throw new ArgumentException("sprites-json entry '" + key + "' must be a number.");
+            return token.Value<float>();
+        }
+
+        private static Vector2 ReadJsonPivot(JObject obj)
+        {
+            var token = obj["pivot"];
+            if (token == null || token.Type == JTokenType.Null)
+                return new Vector2(0.5f, 0.5f);
+
+            if (token is JArray array)
+            {
+                if (array.Count != 2 || (array[0].Type != JTokenType.Integer && array[0].Type != JTokenType.Float) || (array[1].Type != JTokenType.Integer && array[1].Type != JTokenType.Float))
+                    throw new ArgumentException("pivot array must contain two numbers [x, y].");
+                return new Vector2(array[0].Value<float>(), array[1].Value<float>());
+            }
+
+            if (token is JObject pivotObj)
+            {
+                var xToken = pivotObj["x"];
+                var yToken = pivotObj["y"];
+                if (xToken == null || yToken == null || (xToken.Type != JTokenType.Integer && xToken.Type != JTokenType.Float) || (yToken.Type != JTokenType.Integer && yToken.Type != JTokenType.Float))
+                    throw new ArgumentException("pivot object must contain numeric x and y.");
+                return new Vector2(xToken.Value<float>(), yToken.Value<float>());
+            }
+
+            throw new ArgumentException("pivot must be {x, y} or [x, y].");
         }
 
         private static object GetSpriteDataProvider(AssetImporter importer)
@@ -430,30 +528,464 @@ namespace DucMinh.UnityMcp.Editor
                 throw new ArgumentException("Every sprite rect must stay within the texture bounds and have positive width and height.");
             if (float.IsNaN(value.x) || float.IsNaN(value.y) || float.IsNaN(value.width) || float.IsNaN(value.height) || float.IsInfinity(value.x) || float.IsInfinity(value.y) || float.IsInfinity(value.width) || float.IsInfinity(value.height))
                 throw new ArgumentException("Sprite rect values must be finite.");
-            if (value.pivot.x < 0f || value.pivot.x > 1f || value.pivot.y < 0f || value.pivot.y > 1f) throw new ArgumentException("Sprite pivots must be normalized between zero and one.");
+            if (value.pivot.x < 0f || value.pivot.x > 1f || value.pivot.y < 0f || value.pivot.y > 1f)
+                throw new ArgumentException("Sprite pivots must be normalized between zero and one.");
         }
 
-        private static UiToolkitTextEditOutput ApplyUiToolkitTextEdits(string path, string expectedRevision, List<UiToolkitTextEdit> edits, UnityMcpContext context, bool isUxml)
+        private static void SetMember(object target, string name, object value)
+        {
+            var type = target.GetType();
+            var property = type.GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
+            if (property != null && property.CanWrite) { property.SetValue(target, value, null); return; }
+            var field = type.GetField(name, BindingFlags.Public | BindingFlags.Instance);
+            if (field != null) { field.SetValue(target, value); return; }
+            throw new InvalidOperationException(type.FullName + " does not expose writable member '" + name + "'.");
+        }
+
+        private static void SetEnumMember(object target, string name, string value)
+        {
+            var type = target.GetType();
+            var property = type.GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
+            var memberType = property?.PropertyType ?? type.GetField(name, BindingFlags.Public | BindingFlags.Instance)?.FieldType;
+            if (memberType == null || !memberType.IsEnum) throw new InvalidOperationException(type.FullName + " does not expose enum member '" + name + "'.");
+            object parsed;
+            try { parsed = Enum.Parse(memberType, value, true); }
+            catch (ArgumentException exception) { throw new ArgumentException("'" + value + "' is not a valid " + name + " value.", exception); }
+            SetMember(target, name, parsed);
+        }
+
+        private static object InvokeByName(object target, string name, params object[] arguments)
+        {
+            var candidates = target.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal) && method.GetParameters().Length == arguments.Length)
+                .ToList();
+            foreach (var method in candidates)
+            {
+                var parameters = method.GetParameters();
+                var compatible = true;
+                for (var index = 0; index < parameters.Length; index++)
+                {
+                    if (arguments[index] != null && !parameters[index].ParameterType.IsInstanceOfType(arguments[index])) { compatible = false; break; }
+                }
+
+                if (compatible) return method.Invoke(target, arguments);
+            }
+
+            throw new InvalidOperationException(target.GetType().FullName + " does not expose a compatible " + name + " method.");
+        }
+#endif
+
+#if DM_TILEMAP_PRESENT
+        private const string TilemapGroup = "tilemap";
+        private const int MaxTilemapCells = 1024;
+
+        [CliGroupCommand(
+            TilemapGroup,
+            "Set or clear a bounded set of Tilemap cells from stable TileBase asset paths.",
+            Name = "set_tiles",
+            Effect = CommandEffect.Idempotent,
+            Tags = new[] { "tilemap", "2d" })]
+        internal static ExitCode TilemapSetTiles(
+            CommandContext cmd,
+            [CliArg("tilemap-id", "Handle or instanceId of a loaded Tilemap component.", Required = true)] ObjectRef tilemapId,
+            [CliArg("cells-json", "JSON array of {x, y, z, tilePath} cell writes (omit/empty tilePath to clear).", Required = true)] string cellsJson,
+            [CliArg("dry-run", "If true, validate TileBase assets and coordinates without modifying the Tilemap.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => TilemapSetTilesCore(tilemapId, ParseTilemapCellsJson(cellsJson), dryRun));
+        }
+
+        internal static EditorChangeOutput TilemapSetTilesCore(
+            ObjectRef tilemapId,
+            List<TilemapCellWrite> cells,
+            bool dryRun = false)
+        {
+            var tilemapType = RequireType("UnityEngine.Tilemaps.Tilemap");
+            var tileBaseType = RequireType("UnityEngine.Tilemaps.TileBase");
+            var resolvedObj = ResolveObject(tilemapId, "tilemap-id");
+            var target = tilemapType.IsInstanceOfType(resolvedObj)
+                ? resolvedObj
+                : (resolvedObj as GameObject)?.GetComponent(tilemapType);
+
+            if (target == null || !tilemapType.IsInstanceOfType(target))
+                throw new ArgumentException("tilemap-id must identify a loaded Tilemap component.");
+
+            var cellList = cells ?? new List<TilemapCellWrite>();
+            if (cellList.Count == 0 || cellList.Count > MaxTilemapCells)
+                throw new ArgumentException("cells must contain between 1 and " + MaxTilemapCells + " entries.");
+            if (cellList.Any(cell => cell == null))
+                throw new ArgumentException("cells may not contain null entries.");
+
+            var duplicates = new HashSet<string>(StringComparer.Ordinal);
+            var resolved = new List<KeyValuePair<Vector3Int, UnityEngine.Object>>();
+            foreach (var cell in cellList)
+            {
+                var key = cell.x + ":" + cell.y + ":" + cell.z;
+                if (!duplicates.Add(key)) throw new ArgumentException("Each Tilemap coordinate may occur only once.");
+                UnityEngine.Object tile = null;
+                if (!string.IsNullOrWhiteSpace(cell.tilePath))
+                {
+                    var tilePath = NormalizeExistingAssetPath(cell.tilePath, null);
+                    tile = AssetDatabase.LoadAssetAtPath(tilePath, tileBaseType);
+                    if (tile == null) throw new ArgumentException("tilePath must identify a TileBase asset: " + cell.tilePath);
+                }
+
+                resolved.Add(new KeyValuePair<Vector3Int, UnityEngine.Object>(new Vector3Int(cell.x, cell.y, cell.z), tile));
+            }
+
+            var setTile = tilemapType.GetMethod("SetTile", BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(Vector3Int), tileBaseType }, null);
+            if (setTile == null) throw new InvalidOperationException("The installed Tilemap API does not expose SetTile(Vector3Int, TileBase).");
+
+            if (!dryRun)
+            {
+                using (new AuthoringUndoScope("UnityMCP Set Tilemap Tiles"))
+                {
+                    Undo.RecordObject(target, "UnityMCP Set Tilemap Tiles");
+                    foreach (var item in resolved) setTile.Invoke(target, new object[] { item.Key, item.Value });
+                    EditorUtility.SetDirty(target);
+                    if (target is Component component && component.gameObject.scene.IsValid())
+                        EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
+                }
+            }
+
+            var output = Change(
+                dryRun,
+                "Set or clear " + resolved.Count + " Tilemap cell(s).",
+                "set-tilemap-cells",
+                UnityMcpObjectId.Get(target).ToString(CultureInfo.InvariantCulture));
+            output.instanceId = UnityMcpObjectId.Get(target);
+            return output;
+        }
+
+        internal static List<TilemapCellWrite> ParseTilemapCellsJson(string cellsJson)
+        {
+            if (string.IsNullOrWhiteSpace(cellsJson))
+                throw new ArgumentException("cells-json is required.");
+
+            JArray array;
+            try
+            {
+                if (!(JToken.Parse(cellsJson) is JArray parsed))
+                    throw new ArgumentException("cells-json must be a JSON array of {x, y, z, tilePath} objects.");
+                array = parsed;
+            }
+            catch (ArgumentException) { throw; }
+            catch (Exception ex)
+            {
+                throw new ArgumentException("cells-json is not valid JSON: " + ex.Message, ex);
+            }
+
+            var result = new List<TilemapCellWrite>(array.Count);
+            foreach (var item in array)
+            {
+                if (!(item is JObject obj))
+                    throw new ArgumentException("cells-json entries must be JSON objects.");
+                result.Add(new TilemapCellWrite
+                {
+                    x = ReadJsonRequiredInt(obj, "x"),
+                    y = ReadJsonRequiredInt(obj, "y"),
+                    z = ReadJsonOptionalInt(obj, "z"),
+                    tilePath = ReadJsonString(obj, "tilePath")
+                });
+            }
+
+            return result;
+        }
+
+        private static int ReadJsonOptionalInt(JObject obj, string key)
+        {
+            var token = obj[key];
+            if (token == null || token.Type == JTokenType.Null) return 0;
+            if (token.Type != JTokenType.Integer)
+                throw new ArgumentException("cells-json entry '" + key + "' must be an integer.");
+            return token.Value<int>();
+        }
+
+        private static UnityEngine.Object ResolveObject(ObjectRef handle, string paramName)
+        {
+            if (handle == null || handle.IsEmpty)
+                throw new ArgumentException(paramName + " is required.");
+
+            if (ObjectResolver.TryResolve(handle, out var obj, out var error) && obj != null)
+                return obj;
+
+            var text = handle.ToString();
+            if (!string.IsNullOrEmpty(text) && text.StartsWith("instanceId:", StringComparison.Ordinal)
+                && int.TryParse(text.Substring("instanceId:".Length), NumberStyles.Integer, CultureInfo.InvariantCulture, out var legacyId))
+            {
+                var legacy = UnityMcpEditorObjectId.Resolve(legacyId);
+                if (legacy != null) return legacy;
+            }
+
+            throw new ArgumentException(paramName + " could not be resolved: " + (error ?? "not found."));
+        }
+#endif
+
+        [CliGroupCommand(
+            UiToolkitGroup,
+            "Inspect a bounded UI Toolkit UXML document tree and its declared style sheet sources.",
+            Name = "scan",
+            Effect = CommandEffect.ReadOnly,
+            Tags = new[] { "ui", "uitoolkit" })]
+        internal static ExitCode UiToolkitScan(
+            CommandContext cmd,
+            [CliArg("path", "Project-relative path to an existing .uxml asset under Assets/.", Required = true)] string path,
+            [CliArg("limit", "Maximum number of elements to return (1-1000).")] int limit = 200)
+        {
+            return Execute(cmd, () => ScanCore(path, limit));
+        }
+
+        [CliGroupCommand(
+            UiToolkitGroup,
+            "Apply revision-checked bounded text edits to a valid UXML asset.",
+            Name = "edit_uxml",
+            Effect = CommandEffect.Idempotent,
+            Tags = new[] { "ui", "uitoolkit" })]
+        internal static ExitCode UiToolkitUxmlEdit(
+            CommandContext cmd,
+            [CliArg("path", "Project-relative path to an existing .uxml asset under Assets/.", Required = true)] string path,
+            [CliArg("expected-revision", "SHA-256 revision returned by uitoolkit scan.", Required = true)] string expectedRevision,
+            [CliArg("edits-json", "JSON array of {startOffset, endOffset, newText} text edits.", Required = true)] string editsJson,
+            [CliArg("dry-run", "If true, validate revision, edits, and XML structure without writing the file.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => EditUxmlCore(path, expectedRevision, ParseTextEditsJson(editsJson), dryRun));
+        }
+
+        [CliGroupCommand(
+            UiToolkitGroup,
+            "Apply revision-checked bounded text edits to a syntactically balanced USS asset.",
+            Name = "edit_uss",
+            Effect = CommandEffect.Idempotent,
+            Tags = new[] { "ui", "uitoolkit" })]
+        internal static ExitCode UiToolkitUssEdit(
+            CommandContext cmd,
+            [CliArg("path", "Project-relative path to an existing .uss asset under Assets/.", Required = true)] string path,
+            [CliArg("expected-revision", "SHA-256 revision of the current USS asset contents.", Required = true)] string expectedRevision,
+            [CliArg("edits-json", "JSON array of {startOffset, endOffset, newText} text edits.", Required = true)] string editsJson,
+            [CliArg("dry-run", "If true, validate revision, edits, and USS brace balance without writing the file.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => EditUssCore(path, expectedRevision, ParseTextEditsJson(editsJson), dryRun));
+        }
+
+        [CliGroupCommand(
+            UiToolkitGroup,
+            "Scaffold a bounded UI Toolkit MonoBehaviour controller with named VisualElement bindings.",
+            Name = "scaffold_controller",
+            Effect = CommandEffect.Additive,
+            Tags = new[] { "ui", "uitoolkit" })]
+        internal static ExitCode UiToolkitControllerScaffold(
+            CommandContext cmd,
+            [CliArg("path", "Project-relative .cs path under Assets/ for the new controller script.", Required = true)] string path,
+            [CliArg("class-name", "C# class name for the MonoBehaviour controller.", Required = true)] string className,
+            [CliArg("uxml-path", "Project-relative path to the target .uxml asset under Assets/.", Required = true)] string uxmlPath,
+            [CliArg("namespace-name", "Optional C# namespace for the generated script.")] string namespaceName = null,
+            [CliArg("element-names", "Optional VisualElement names to bind (JSON array or comma-separated C# identifiers).")] string elementNames = null,
+            [CliArg("dry-run", "If true, validate inputs and preview without creating the script.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => ScaffoldControllerCore(
+                path, className, uxmlPath, namespaceName, ParseElementNames(elementNames), dryRun));
+        }
+
+        internal static UiToolkitScanOutput ScanCore(string path, int limit = 200)
+        {
+            var normalizedPath = RequireUiToolkitAsset(path, ".uxml", "UnityEngine.UIElements.VisualTreeAsset");
+            var source = ReadUtf8Source(ToFullPath(normalizedPath));
+            var output = ScanUxml(source.text, Math.Max(1, Math.Min(1000, limit)));
+            output.path = normalizedPath;
+            output.revision = Revision(source.bytes);
+            return output;
+        }
+
+        internal static UiToolkitTextEditOutput EditUxmlCore(
+            string path,
+            string expectedRevision,
+            List<UiToolkitTextEdit> edits,
+            bool dryRun = false)
+        {
+            var normalizedPath = RequireUiToolkitAsset(path, ".uxml", "UnityEngine.UIElements.VisualTreeAsset");
+            return ApplyUiToolkitTextEdits(normalizedPath, expectedRevision, edits, dryRun, true);
+        }
+
+        internal static UiToolkitTextEditOutput EditUssCore(
+            string path,
+            string expectedRevision,
+            List<UiToolkitTextEdit> edits,
+            bool dryRun = false)
+        {
+            var normalizedPath = RequireUiToolkitAsset(path, ".uss", "UnityEngine.UIElements.StyleSheet");
+            return ApplyUiToolkitTextEdits(normalizedPath, expectedRevision, edits, dryRun, false);
+        }
+
+        internal static UiToolkitControllerScaffoldOutput ScaffoldControllerCore(
+            string path,
+            string className,
+            string uxmlPath,
+            string namespaceName = null,
+            List<string> elementNames = null,
+            bool dryRun = false)
+        {
+            var normalizedUxmlPath = RequireUiToolkitAsset(uxmlPath, ".uxml", "UnityEngine.UIElements.VisualTreeAsset");
+            if (string.IsNullOrWhiteSpace(className) || !CSharpIdentifier.IsMatch(className))
+                throw new ArgumentException("class-name must be a valid C# identifier.");
+            if (!string.IsNullOrWhiteSpace(namespaceName))
+                ValidateNamespace(namespaceName);
+
+            var bindings = elementNames ?? new List<string>();
+            if (bindings.Count > 64 || bindings.Any(value => string.IsNullOrWhiteSpace(value) || !CSharpIdentifier.IsMatch(value)))
+                throw new ArgumentException("element-names may contain at most 64 non-empty C# identifiers.");
+            if (bindings.Distinct(StringComparer.Ordinal).Count() != bindings.Count)
+                throw new ArgumentException("element-names must be unique.");
+
+            var normalizedPath = NormalizeCreatableAssetPath(path, ".cs");
+            var fullPath = ToFullPath(normalizedPath);
+            if (File.Exists(fullPath) || AssetDatabase.LoadMainAssetAtPath(normalizedPath) != null)
+                throw new InvalidOperationException("The controller path already exists.");
+
+            var parent = Path.GetDirectoryName(fullPath);
+            if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
+                throw new ArgumentException("The controller target folder must already exist under Assets.");
+
+            EnsureNoReparsePoint(AssetsRoot, parent);
+            var contents = BuildControllerSource(className, namespaceName, bindings);
+
+            if (!dryRun)
+            {
+                File.WriteAllBytes(fullPath, EncodeUtf8(contents, false));
+                AssetDatabase.ImportAsset(normalizedPath, ImportAssetOptions.ForceSynchronousImport);
+            }
+
+            return new UiToolkitControllerScaffoldOutput
+            {
+                dryRun = dryRun,
+                created = !dryRun,
+                path = normalizedPath,
+                className = className,
+                uxmlPath = normalizedUxmlPath,
+                rollbackSupported = false,
+                journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "create-uitoolkit-controller", after = normalizedPath } }
+            };
+        }
+
+        internal static List<UiToolkitTextEdit> ParseTextEditsJson(string editsJson)
+        {
+            if (string.IsNullOrWhiteSpace(editsJson))
+                throw new ArgumentException("edits-json is required.");
+
+            JArray array;
+            try
+            {
+                if (!(JToken.Parse(editsJson) is JArray parsed))
+                    throw new ArgumentException("edits-json must be a JSON array of {startOffset, endOffset, newText} objects.");
+                array = parsed;
+            }
+            catch (ArgumentException) { throw; }
+            catch (Exception ex)
+            {
+                throw new ArgumentException("edits-json is not valid JSON: " + ex.Message, ex);
+            }
+
+            var result = new List<UiToolkitTextEdit>(array.Count);
+            foreach (var item in array)
+            {
+                if (!(item is JObject obj))
+                    throw new ArgumentException("edits-json entries must be JSON objects.");
+
+                var startOffset = ReadJsonRequiredInt(obj, "startOffset");
+                var endOffset = ReadJsonRequiredInt(obj, "endOffset");
+                var newTextToken = obj["newText"];
+                if (newTextToken == null || newTextToken.Type != JTokenType.String)
+                    throw new ArgumentException("edits-json entry 'newText' must be a string.");
+
+                result.Add(new UiToolkitTextEdit
+                {
+                    startOffset = startOffset,
+                    endOffset = endOffset,
+                    newText = newTextToken.Value<string>()
+                });
+            }
+
+            return result;
+        }
+
+        internal static List<string> ParseElementNames(string elementNames)
+        {
+            if (string.IsNullOrWhiteSpace(elementNames))
+                return new List<string>();
+
+            var trimmed = elementNames.Trim();
+            if (trimmed.StartsWith("[", StringComparison.Ordinal))
+            {
+                JArray array;
+                try { array = JArray.Parse(trimmed); }
+                catch (Exception ex) { throw new ArgumentException("element-names must be a comma-separated list or valid JSON string array: " + ex.Message, ex); }
+
+                var parsed = new List<string>(array.Count);
+                foreach (var item in array)
+                {
+                    if (item.Type != JTokenType.String)
+                        throw new ArgumentException("element-names JSON array entries must be strings.");
+                    parsed.Add(item.Value<string>());
+                }
+
+                return parsed;
+            }
+
+            return trimmed.Split(',').Select(part => part.Trim()).ToList();
+        }
+
+        private static ExitCode Execute(CommandContext cmd, Func<object> action)
+        {
+            try
+            {
+                cmd.Result.Write(action());
+                return ExitCode.Success;
+            }
+            catch (TargetInvocationException ex)
+            {
+                var inner = ex.InnerException ?? ex;
+                cmd.Log.Error(inner.Message);
+                return inner is ArgumentException ? ExitCode.InvalidUsage : ExitCode.Failed;
+            }
+            catch (ArgumentException ex)
+            {
+                cmd.Log.Error(ex.Message);
+                return ExitCode.InvalidUsage;
+            }
+            catch (Exception ex)
+            {
+                cmd.Log.Error(ex.Message);
+                return ExitCode.Failed;
+            }
+        }
+
+        private static UiToolkitTextEditOutput ApplyUiToolkitTextEdits(
+            string path,
+            string expectedRevision,
+            List<UiToolkitTextEdit> edits,
+            bool dryRun,
+            bool isUxml)
         {
             var source = ReadUtf8Source(ToFullPath(path));
             var before = Revision(source.bytes);
             if (string.IsNullOrWhiteSpace(expectedRevision) || !string.Equals(expectedRevision, before, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("expectedRevision does not match the current asset contents.");
+                throw new InvalidOperationException("expected-revision does not match the current asset contents.");
+
             var after = ApplyTextEdits(source.text, edits);
             if (isUxml) ValidateUxml(after); else ValidateUss(after);
+
             var afterBytes = EncodeUtf8(after, source.hasBom);
             var changed = !source.bytes.SequenceEqual(afterBytes);
-            if (!context.DryRun && changed)
+            if (!dryRun && changed)
             {
                 var fullPath = ToFullPath(path);
                 EnsureNoReparsePoint(AssetsRoot, fullPath);
                 File.WriteAllBytes(fullPath, afterBytes);
                 AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceSynchronousImport);
             }
+
             return new UiToolkitTextEditOutput
             {
-                dryRun = context.DryRun,
-                changed = changed && !context.DryRun,
+                dryRun = dryRun,
+                changed = changed && !dryRun,
                 path = path,
                 revisionBefore = before,
                 revisionAfter = Revision(afterBytes),
@@ -478,6 +1010,7 @@ namespace DucMinh.UnityMcp.Editor
                             var source = reader.GetAttribute("src");
                             if (!string.IsNullOrWhiteSpace(source) && !output.styleSheets.Contains(source)) output.styleSheets.Add(source);
                         }
+
                         if (output.elements.Count >= limit) { output.truncated = true; continue; }
                         var info = new UiToolkitElementInfo
                         {
@@ -495,6 +1028,7 @@ namespace DucMinh.UnityMcp.Editor
             {
                 throw new ArgumentException("The UXML source is not valid XML: " + exception.Message, exception);
             }
+
             return output;
         }
 
@@ -519,17 +1053,20 @@ namespace DucMinh.UnityMcp.Editor
                     if (current == '*' && next == '/') { inComment = false; index++; }
                     continue;
                 }
+
                 if (quote != '\0')
                 {
                     if (current == '\\') { index++; continue; }
                     if (current == quote) quote = '\0';
                     continue;
                 }
+
                 if (current == '/' && next == '*') { inComment = true; index++; continue; }
                 if (current == '\'' || current == '"') { quote = current; continue; }
                 if (current == '{') braces++;
                 else if (current == '}' && --braces < 0) throw new ArgumentException("USS contains an unmatched closing brace.");
             }
+
             if (inComment) throw new ArgumentException("USS contains an unterminated comment.");
             if (quote != '\0') throw new ArgumentException("USS contains an unterminated string.");
             if (braces != 0) throw new ArgumentException("USS contains unbalanced braces.");
@@ -551,9 +1088,11 @@ namespace DucMinh.UnityMcp.Editor
                     throw new ArgumentException("Text edits may not overlap or insert at the same offset.");
                 previous = edit;
             }
+
             var builder = new StringBuilder(source);
             foreach (var edit in values.OrderByDescending(value => value.startOffset).ThenByDescending(value => value.endOffset))
                 builder.Remove(edit.startOffset, edit.endOffset - edit.startOffset).Insert(edit.startOffset, edit.newText);
+
             var result = builder.ToString();
             if (new UTF8Encoding(false).GetByteCount(result) > MaxTextBytes) throw new ArgumentException("The edited asset exceeds the 1 MiB limit.");
             return result;
@@ -570,6 +1109,7 @@ namespace DucMinh.UnityMcp.Editor
                 builder.Append("namespace ").Append(namespaceName).AppendLine();
                 builder.AppendLine("{");
             }
+
             var indentation = string.IsNullOrWhiteSpace(namespaceName) ? string.Empty : "    ";
             builder.Append(indentation).AppendLine("[DisallowMultipleComponent]");
             builder.Append(indentation).Append("public sealed class ").Append(className).AppendLine(" : MonoBehaviour");
@@ -598,43 +1138,26 @@ namespace DucMinh.UnityMcp.Editor
         private static void ValidateNamespace(string namespaceName)
         {
             var segments = namespaceName.Split('.');
-            if (segments.Length == 0 || segments.Any(segment => !CSharpIdentifier.IsMatch(segment))) throw new ArgumentException("namespaceName must contain dot-separated C# identifiers.");
+            if (segments.Length == 0 || segments.Any(segment => !CSharpIdentifier.IsMatch(segment)))
+                throw new ArgumentException("namespace-name must contain dot-separated C# identifiers.");
         }
 
         private static string RequireUiToolkitAsset(string path, string extension, string typeName)
         {
             var assetPath = NormalizeExistingAssetPath(path, extension);
             var type = RequireType(typeName);
-            if (AssetDatabase.LoadAssetAtPath(assetPath, type) == null) throw new ArgumentException("The requested asset is not a valid " + typeName + ": " + assetPath);
+            if (AssetDatabase.LoadAssetAtPath(assetPath, type) == null)
+                throw new ArgumentException("The requested asset is not a valid " + typeName + ": " + assetPath);
             return assetPath;
-        }
-
-        private static object RequireAssetOfType(string path, Type type, string displayName)
-        {
-            var assetPath = NormalizeExistingAssetPath(path, null);
-            var asset = AssetDatabase.LoadAssetAtPath(assetPath, type);
-            if (asset == null) throw new ArgumentException("path must identify a " + displayName + " asset.");
-            return asset;
         }
 
         private static Type RequireType(string fullName)
         {
-            var type = Type.GetType(fullName, false);
-            if (type != null) return type;
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                try
-                {
-                    type = assembly.GetType(fullName, false);
-                    if (type != null) return type;
-                }
-                catch { }
-            }
-            throw new InvalidOperationException("The required optional Unity type is not available: " + fullName);
+            return EditorCommandHelpers.TryResolveOptionalType(fullName)
+                ?? throw new InvalidOperationException("The required optional Unity type is not available: " + fullName);
         }
 
-        private static int ReadIntProperty(object target, string name) => Convert.ToInt32(ReadMember(target, name), CultureInfo.InvariantCulture);
-
+#if DM_TERRAIN_PRESENT || DM_2D_SPRITE_PRESENT
         private static object ReadMember(object target, string name)
         {
             var type = target.GetType();
@@ -644,65 +1167,38 @@ namespace DucMinh.UnityMcp.Editor
             if (field != null) return field.GetValue(target);
             throw new InvalidOperationException(type.FullName + " does not expose readable member '" + name + "'.");
         }
+#endif
 
-        private static void SetMember(object target, string name, object value)
+#if DM_2D_SPRITE_PRESENT || DM_TILEMAP_PRESENT
+        private static string ReadJsonString(JObject obj, string key)
         {
-            var type = target.GetType();
-            var property = type.GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
-            if (property != null && property.CanWrite) { property.SetValue(target, value, null); return; }
-            var field = type.GetField(name, BindingFlags.Public | BindingFlags.Instance);
-            if (field != null) { field.SetValue(target, value); return; }
-            throw new InvalidOperationException(type.FullName + " does not expose writable member '" + name + "'.");
+            var token = obj[key];
+            return token == null || token.Type == JTokenType.Null ? null : token.Value<string>();
+        }
+#endif
+
+        private static int ReadJsonRequiredInt(JObject obj, string key)
+        {
+            var token = obj[key];
+            if (token == null || token.Type != JTokenType.Integer)
+                throw new ArgumentException("JSON entry '" + key + "' must be an integer.");
+            return token.Value<int>();
         }
 
-        private static void SetEnumMember(object target, string name, string value)
+#if DM_TERRAIN_PRESENT || DM_2D_SPRITE_PRESENT || DM_TILEMAP_PRESENT
+        private static EditorChangeOutput Change(bool dryRun, string summary, string operation, string target, string path = null)
         {
-            var type = target.GetType();
-            var property = type.GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
-            var memberType = property?.PropertyType ?? type.GetField(name, BindingFlags.Public | BindingFlags.Instance)?.FieldType;
-            if (memberType == null || !memberType.IsEnum) throw new InvalidOperationException(type.FullName + " does not expose enum member '" + name + "'.");
-            object parsed;
-            try { parsed = Enum.Parse(memberType, value, true); }
-            catch (ArgumentException exception) { throw new ArgumentException("'" + value + "' is not a valid " + name + " value.", exception); }
-            SetMember(target, name, parsed);
-        }
-
-        private static object InvokeExact(object target, string name, Type[] parameterTypes, params object[] arguments)
-        {
-            var method = target.GetType().GetMethod(name, BindingFlags.Public | BindingFlags.Instance, null, parameterTypes, null);
-            if (method == null) throw new InvalidOperationException(target.GetType().FullName + " does not expose the expected " + name + " overload.");
-            return method.Invoke(target, arguments);
-        }
-
-        private static object InvokeByName(object target, string name, params object[] arguments)
-        {
-            var candidates = target.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal) && method.GetParameters().Length == arguments.Length)
-                .ToList();
-            foreach (var method in candidates)
+            return new EditorChangeOutput
             {
-                var parameters = method.GetParameters();
-                var compatible = true;
-                for (var index = 0; index < parameters.Length; index++)
-                {
-                    if (arguments[index] != null && !parameters[index].ParameterType.IsInstanceOfType(arguments[index])) { compatible = false; break; }
-                }
-                if (compatible) return method.Invoke(target, arguments);
-            }
-            throw new InvalidOperationException(target.GetType().FullName + " does not expose a compatible " + name + " method.");
-        }
-
-        private static ChangeOutput Change(UnityMcpContext context, string summary, string operation, string target)
-        {
-            return new ChangeOutput
-            {
-                dryRun = context.DryRun,
-                changed = !context.DryRun,
+                dryRun = dryRun,
+                changed = !dryRun,
                 summary = summary,
+                path = path,
                 rollbackSupported = false,
                 journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = operation, after = target } }
             };
         }
+#endif
 
         private sealed class TextSource { public byte[] bytes; public string text; public bool hasBom; }
 
@@ -712,7 +1208,8 @@ namespace DucMinh.UnityMcp.Editor
             var bytes = File.ReadAllBytes(fullPath);
             if (bytes.Length > MaxTextBytes) throw new ArgumentException("Asset exceeds the 1 MiB tool limit.");
             var offset = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF ? 3 : 0;
-            if (bytes.Length >= 2 && ((bytes[0] == 0xFF && bytes[1] == 0xFE) || (bytes[0] == 0xFE && bytes[1] == 0xFF))) throw new ArgumentException("Only UTF-8 assets are supported.");
+            if (bytes.Length >= 2 && ((bytes[0] == 0xFF && bytes[1] == 0xFE) || (bytes[0] == 0xFE && bytes[1] == 0xFF)))
+                throw new ArgumentException("Only UTF-8 assets are supported.");
             string text;
             try { text = new UTF8Encoding(false, true).GetString(bytes, offset, bytes.Length - offset); }
             catch (DecoderFallbackException exception) { throw new ArgumentException("Asset is not valid UTF-8.", exception); }
@@ -779,20 +1276,24 @@ namespace DucMinh.UnityMcp.Editor
         {
             var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             var normalizedPath = Path.GetFullPath(fullPath);
-            return string.Equals(normalizedRoot, normalizedPath, StringComparison.OrdinalIgnoreCase) || normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+            return string.Equals(normalizedRoot, normalizedPath, StringComparison.OrdinalIgnoreCase)
+                || normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
         }
 
         private static void EnsureNoReparsePoint(string root, string fullPath)
         {
             if (!IsContained(root, fullPath)) throw new ArgumentException("Path must remain within the allowed root.");
             var current = Path.GetFullPath(root);
-            if (Directory.Exists(current) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) throw new ArgumentException("The Assets root may not be a symbolic link or junction.");
-            var relative = fullPath.Substring(current.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (Directory.Exists(current) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                throw new ArgumentException("The Assets root may not be a symbolic link or junction.");
+            var relative = fullPath.Substring(current.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Length)
+                .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             foreach (var part in relative.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries))
             {
                 current = Path.Combine(current, part);
                 if (!File.Exists(current) && !Directory.Exists(current)) break;
-                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) throw new ArgumentException("Symbolic links and junctions are not permitted in tool paths.");
+                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                    throw new ArgumentException("Symbolic links and junctions are not permitted in tool paths.");
             }
         }
     }

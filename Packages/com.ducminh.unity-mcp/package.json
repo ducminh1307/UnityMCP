@@ -1,8 +1,8 @@
 {
   "name": "com.ducminh.unity-mcp",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "displayName": "Unity MCP",
-  "description": "Secure local MCP bridge and dynamic typed tool registry for Unity 6.",
+  "description": "Unity CLI & Pipeline extension commands and AI client setup for Unity 6.",
   "unity": "6000.0",
   "author": {
     "name": "Duc Minh"
@@ -10,16 +10,15 @@
   "keywords": ["mcp", "automation", "ai"],
   "license": "MIT",
   "dependencies": {
+    "com.unity.pipeline": "1.0.1",
     "com.unity.nuget.newtonsoft-json": "3.2.1",
     "com.unity.modules.ai": "1.0.0",
-    "com.unity.modules.animation": "1.0.0",
-    "com.unity.modules.audio": "1.0.0",
     "com.unity.modules.particlesystem": "1.0.0",
     "com.unity.modules.physics": "1.0.0",
     "com.unity.test-framework": "1.6.0",
     "com.unity.modules.imageconversion": "1.0.0",
     "com.unity.modules.jsonserialize": "1.0.0",
-    "com.unity.modules.screencapture": "1.0.0"
+    "com.unity.ugui": "2.0.0"
   },
   "samples": [
     {

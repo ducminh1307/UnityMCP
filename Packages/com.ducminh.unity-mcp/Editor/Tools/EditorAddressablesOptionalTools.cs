@@ -1,3 +1,4 @@
+#if DM_ADDRESSABLES_PRESENT
 #pragma warning disable UAC0005 // Editor tool reflection scans currently loaded optional package types.
 using System;
 using System.Collections;
@@ -5,18 +6,17 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using Unity.Pipeline.Commands;
+using Unity.Pipeline.Editor.Authoring;
 using UnityEditor;
 using UnityEngine;
 
 namespace DucMinh.UnityMcp.Editor
 {
-    [Serializable] public sealed class AddressablesGroupsListInput
-    {
-        /// <summary>Optional AddressableAssetSettings asset under Assets/. Omit to use the project's configured default settings without creating one.</summary>
-        public string settingsPath;
-    }
-
-    [Serializable] public sealed class AddressablesGroupInfo
+    [Serializable]
+    public sealed class AddressablesGroupInfo
     {
         public string name;
         public string guid;
@@ -26,25 +26,16 @@ namespace DucMinh.UnityMcp.Editor
         public List<string> schemaTypes = new List<string>();
     }
 
-    [Serializable] public sealed class AddressablesGroupsListOutput
+    [Serializable]
+    public sealed class AddressablesGroupsListOutput
     {
         public string settingsPath;
         public int groupCount;
         public List<AddressablesGroupInfo> groups = new List<AddressablesGroupInfo>();
     }
 
-    [Serializable] public sealed class AddressablesGroupCreateInput
-    {
-        /// <summary>Optional AddressableAssetSettings asset under Assets/. Omit to use the configured default settings.</summary>
-        public string settingsPath;
-        public string groupName;
-        /// <summary>Optional existing group whose schema types are copied. Omit to use the existing default group.</summary>
-        public string templateGroupName;
-        public bool setAsDefaultGroup;
-        public bool apply;
-    }
-
-    [Serializable] public sealed class AddressablesGroupCreateOutput
+    [Serializable]
+    public sealed class AddressablesGroupCreateOutput
     {
         public bool dryRun;
         public bool created;
@@ -58,19 +49,8 @@ namespace DucMinh.UnityMcp.Editor
         public List<ChangeJournalEntry> journal = new List<ChangeJournalEntry>();
     }
 
-    [Serializable] public sealed class AddressablesEntryAddInput
-    {
-        /// <summary>Optional AddressableAssetSettings asset under Assets/. Omit to use the configured default settings.</summary>
-        public string settingsPath;
-        public string groupName;
-        /// <summary>Existing non-folder asset path under Assets/. Assets inside any Resources folder are deliberately rejected.</summary>
-        public string assetPath;
-        /// <summary>Optional address. If omitted, an existing entry keeps its address and a new entry uses Addressables' default address.</summary>
-        public string address;
-        public bool apply;
-    }
-
-    [Serializable] public sealed class AddressablesEntryAddOutput
+    [Serializable]
+    public sealed class AddressablesEntryAddOutput
     {
         public bool dryRun;
         public bool changed;
@@ -86,15 +66,8 @@ namespace DucMinh.UnityMcp.Editor
         public List<ChangeJournalEntry> journal = new List<ChangeJournalEntry>();
     }
 
-    [Serializable] public sealed class AddressablesEntryRemoveInput
-    {
-        /// <summary>Optional AddressableAssetSettings asset under Assets/. Omit to use the configured default settings.</summary>
-        public string settingsPath;
-        public string assetPath;
-        public bool apply;
-    }
-
-    [Serializable] public sealed class AddressablesEntryRemoveOutput
+    [Serializable]
+    public sealed class AddressablesEntryRemoveOutput
     {
         public bool dryRun;
         public bool removed;
@@ -107,31 +80,27 @@ namespace DucMinh.UnityMcp.Editor
         public List<ChangeJournalEntry> journal = new List<ChangeJournalEntry>();
     }
 
-    [Serializable] public sealed class AddressablesBuildInput
-    {
-        /// <summary>Optional path to the configured default AddressableAssetSettings asset. A non-default settings asset is rejected because Addressables' public build entry point is static.</summary>
-        public string settingsPath;
-        public bool apply;
-    }
-
-    [Serializable] public sealed class AddressablesBuildOutput
+    [Serializable]
+    public sealed class AddressablesBuildOutput
     {
         public bool dryRun;
         public bool accepted;
-        public string jobId;
         public string status;
         public string settingsPath;
+        public string outputPath;
+        public string contentStateFilePath;
+        public bool resultReported;
         public string summary;
     }
 
     /// <summary>
-    /// Reflection-only Addressables tools. No Addressables assembly is referenced at compile time;
-    /// RequiredType keeps these tools out of the live registry unless the package is installed.
-    /// The mutating tools intentionally use the documented public settings APIs only and do not
-    /// initialize a missing Addressables project configuration.
+    /// Reflection-only Addressables commands. No Addressables assembly is referenced at compile time;
+    /// DM_ADDRESSABLES_PRESENT gates compilation and mutating tools only use documented public settings APIs
+    /// without implicitly initializing a missing Addressables configuration.
     /// </summary>
     public static class EditorAddressablesOptionalTools
     {
+        private const string Group = "addressables";
         private const string SettingsTypeName = "UnityEditor.AddressableAssets.Settings.AddressableAssetSettings";
         private const string DefaultSettingsTypeName = "UnityEditor.AddressableAssets.AddressableAssetSettingsDefaultObject";
         private const string GroupTypeName = "UnityEditor.AddressableAssets.Settings.AddressableAssetGroup";
@@ -141,78 +110,197 @@ namespace DucMinh.UnityMcp.Editor
         private const int MaximumAddressLength = 512;
         private const int MaximumBuildErrorLength = 1024;
 
-        [UnityMcpTool("addressables-groups-list", Description = "List Addressables groups and schema types from an existing settings asset without creating configuration.", Category = "project-extensions", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead, RequiredType = SettingsTypeName)]
-        public static AddressablesGroupsListOutput AddressablesGroupsList(AddressablesGroupsListInput input, UnityMcpContext context)
+        [CliGroupCommand(
+            Group,
+            "List Addressables groups and schema types from an existing settings asset without creating configuration.",
+            Name = "list_groups",
+            Effect = CommandEffect.ReadOnly,
+            Tags = new[] { "addressables" })]
+        internal static ExitCode ListGroups(
+            CommandContext cmd,
+            [CliArg("settings-path", "Optional AddressableAssetSettings asset under Assets/. Omit to use the project's configured default settings.")] string settingsPath = null)
         {
-            var settings = RequireSettings(input == null ? null : input.settingsPath, out var settingsPath);
+            return Execute(cmd, () => ListGroupsCore(settingsPath));
+        }
+
+        [CliGroupCommand(
+            Group,
+            "Create one Addressables group by copying validated schema types from an existing template/default group.",
+            Name = "create_group",
+            Effect = CommandEffect.Additive,
+            Tags = new[] { "addressables" })]
+        internal static ExitCode CreateGroupCommand(
+            CommandContext cmd,
+            [CliArg("group-name", "Name of the new Addressables group.", Required = true)] string groupName,
+            [CliArg("settings-path", "Optional AddressableAssetSettings asset under Assets/. Omit to use the configured default settings.")] string settingsPath = null,
+            [CliArg("template-group-name", "Optional existing group whose schema types are copied. Omit to use the existing default group.")] string templateGroupName = null,
+            [CliArg("set-as-default-group", "Set the created group as the default Addressables group.")] bool setAsDefaultGroup = false,
+            [CliArg("dry-run", "If true, validate inputs and preview without creating the group.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => CreateGroupCore(groupName, settingsPath, templateGroupName, setAsDefaultGroup, dryRun));
+        }
+
+        [CliGroupCommand(
+            Group,
+            "Add or move one existing non-Resources asset into a writable Addressables group, optionally setting its address.",
+            Name = "add_entry",
+            Effect = CommandEffect.Idempotent,
+            Tags = new[] { "addressables" })]
+        internal static ExitCode AddEntry(
+            CommandContext cmd,
+            [CliArg("group-name", "Target writable Addressables group name.", Required = true)] string groupName,
+            [CliArg("asset-path", "Existing non-folder asset path under Assets/ (Resources assets are rejected).", Required = true)] string assetPath,
+            [CliArg("address", "Optional address. If omitted, an existing entry keeps its address and a new entry uses Addressables' default.")] string address = null,
+            [CliArg("settings-path", "Optional AddressableAssetSettings asset under Assets/. Omit to use the configured default settings.")] string settingsPath = null,
+            [CliArg("dry-run", "If true, validate inputs and preview without modifying Addressables.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => AddEntryCore(groupName, assetPath, address, settingsPath, dryRun));
+        }
+
+        [CliGroupCommand(
+            Group,
+            "Remove one existing writable Addressables entry without deleting its asset. Requires --confirm unless --dry-run is true.",
+            Name = "remove_entry",
+            Effect = CommandEffect.Destructive,
+            Tags = new[] { "addressables" })]
+        internal static ExitCode RemoveEntry(
+            CommandContext cmd,
+            [CliArg("asset-path", "Existing asset path under Assets/ currently registered in Addressables.", Required = true)] string assetPath,
+            [CliArg("settings-path", "Optional AddressableAssetSettings asset under Assets/. Omit to use the configured default settings.")] string settingsPath = null,
+            [CliArg("confirm", "Must be true to remove the entry (unless --dry-run is true).")] bool confirm = false,
+            [CliArg("dry-run", "If true, validate inputs and preview without removing the entry.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => RemoveEntryCore(assetPath, settingsPath, confirm, dryRun));
+        }
+
+        [CliGroupCommand(
+            Group,
+            "Build Addressables player content with the project's configured default settings. Requires --confirm unless --dry-run is true.",
+            Name = "build",
+            Effect = CommandEffect.Destructive,
+            Tags = new[] { "addressables", "build" })]
+        internal static async Task<ExitCode> Build(
+            CommandContext cmd,
+            [CliArg("settings-path", "Optional path to the configured default AddressableAssetSettings asset.")] string settingsPath = null,
+            [CliArg("confirm", "Must be true to build Addressables player content (unless --dry-run is true).")] bool confirm = false,
+            [CliArg("dry-run", "If true, validate build readiness and preview without running the build.")] bool dryRun = false)
+        {
+            try
+            {
+                var output = await BuildCoreAsync(settingsPath, confirm, dryRun, cmd.CancellationToken);
+                cmd.Result.Write(output);
+                return ExitCode.Success;
+            }
+            catch (OperationCanceledException) when (cmd.CancellationToken.IsCancellationRequested)
+            {
+                return ExitCode.Cancelled;
+            }
+            catch (ArgumentException ex)
+            {
+                cmd.Log.Error(ex.Message);
+                return ExitCode.InvalidUsage;
+            }
+            catch (Exception ex)
+            {
+                cmd.Log.Error(ex.Message);
+                return ExitCode.Failed;
+            }
+        }
+
+        internal static AddressablesGroupsListOutput ListGroupsCore(string settingsPath = null)
+        {
+            var settings = RequireSettings(settingsPath, out var resolvedSettingsPath);
             var groups = EnumerateGroups(settings).Select(ToGroupInfo).OrderBy(group => group.name, StringComparer.Ordinal).ToList();
             return new AddressablesGroupsListOutput
             {
-                settingsPath = settingsPath,
+                settingsPath = resolvedSettingsPath,
                 groupCount = groups.Count,
                 groups = groups
             };
         }
 
-        [UnityMcpTool("addressables-group-create", Description = "Create one Addressables group by copying validated schema types from an existing template/default group; dry-run unless apply is true.", Category = "project-extensions", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = SettingsTypeName)]
-        public static AddressablesGroupCreateOutput AddressablesGroupCreate(AddressablesGroupCreateInput input, UnityMcpContext context)
+        internal static AddressablesGroupCreateOutput CreateGroupCore(
+            string groupName,
+            string settingsPath = null,
+            string templateGroupName = null,
+            bool setAsDefaultGroup = false,
+            bool dryRun = false)
         {
-            if (input == null) throw new ArgumentNullException(nameof(input));
-            var settings = RequireSettings(input.settingsPath, out var settingsPath);
-            var groupName = RequireGroupName(input.groupName, "groupName");
-            if (FindGroup(settings, groupName) != null) throw new ArgumentException("An Addressables group with groupName already exists.");
-            var template = RequireTemplateGroup(settings, input.templateGroupName, out var templateName);
-            if (ReadBool(template, "ReadOnly")) throw new ArgumentException("templateGroupName must not identify a read-only Addressables group.");
-            if (input.setAsDefaultGroup && !ReadBool(template, "Default"))
-                throw new ArgumentException("setAsDefaultGroup requires a template group that is already the Addressables default group.");
+            var settings = RequireSettings(settingsPath, out var resolvedSettingsPath);
+            var normalizedGroupName = RequireGroupName(groupName, "group-name");
+            if (FindGroup(settings, normalizedGroupName) != null)
+                throw new ArgumentException("An Addressables group with group-name already exists.");
+
+            var template = RequireTemplateGroup(settings, templateGroupName, out var resolvedTemplateName);
+            if (ReadBool(template, "ReadOnly"))
+                throw new ArgumentException("template-group-name must not identify a read-only Addressables group.");
+            if (setAsDefaultGroup && !ReadBool(template, "Default"))
+                throw new ArgumentException("set-as-default-group requires a template group that is already the Addressables default group.");
+
             var schemaTypes = ReadSchemaTypes(template);
             if (schemaTypes.Count == 0)
                 throw new ArgumentException("The selected template group has no schemas. Use a configured Addressables group so the new group can participate in the active build.");
 
             var output = new AddressablesGroupCreateOutput
             {
-                dryRun = context.DryRun,
-                created = !context.DryRun,
-                settingsPath = settingsPath,
-                groupName = groupName,
-                templateGroupName = templateName,
-                setAsDefaultGroup = input.setAsDefaultGroup,
+                dryRun = dryRun,
+                created = !dryRun,
+                settingsPath = resolvedSettingsPath,
+                groupName = normalizedGroupName,
+                templateGroupName = resolvedTemplateName,
+                setAsDefaultGroup = setAsDefaultGroup,
                 schemaTypes = schemaTypes.Select(type => type.FullName ?? type.Name).OrderBy(name => name, StringComparer.Ordinal).ToList(),
                 // Addressables creates persistent group/schema assets. Unity Undo is registered where
                 // possible, but this tool cannot promise a complete atomic rollback of every subasset.
                 rollbackSupported = false,
-                journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "create-addressables-group", after = groupName } }
+                journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "create-addressables-group", after = normalizedGroupName } }
             };
-            if (context.DryRun) return output;
+            if (dryRun) return output;
 
-            var group = CreateGroup(settings, groupName, input.setAsDefaultGroup, schemaTypes);
-            if (group == null) throw new InvalidOperationException("Addressables did not return the newly-created group.");
-            if (group is UnityEngine.Object unityGroup) Undo.RegisterCreatedObjectUndo(unityGroup, "UnityMCP Create Addressables Group");
-            if (settings is UnityEngine.Object unitySettings) EditorUtility.SetDirty(unitySettings);
-            if (group is UnityEngine.Object dirtyGroup) EditorUtility.SetDirty(dirtyGroup);
+            object group;
+            using (new AuthoringUndoScope("UnityMCP Create Addressables Group"))
+            {
+                group = CreateGroup(settings, normalizedGroupName, setAsDefaultGroup, schemaTypes);
+                if (group == null) throw new InvalidOperationException("Addressables did not return the newly-created group.");
+                if (group is UnityEngine.Object unityGroup) Undo.RegisterCreatedObjectUndo(unityGroup, "UnityMCP Create Addressables Group");
+                if (settings is UnityEngine.Object unitySettings) EditorUtility.SetDirty(unitySettings);
+                if (group is UnityEngine.Object dirtyGroup) EditorUtility.SetDirty(dirtyGroup);
+            }
+
             AssetDatabase.SaveAssets();
             output.groupGuid = ReadString(group, "Guid");
             return output;
         }
 
-        [UnityMcpTool("addressables-entry-add", Description = "Add or move one existing non-Resources asset into a writable Addressables group, optionally setting its address; dry-run unless apply is true.", Category = "project-extensions", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = SettingsTypeName)]
-        public static AddressablesEntryAddOutput AddressablesEntryAdd(AddressablesEntryAddInput input, UnityMcpContext context)
+        internal static AddressablesEntryAddOutput AddEntryCore(
+            string groupName,
+            string assetPath,
+            string address = null,
+            string settingsPath = null,
+            bool dryRun = false)
         {
-            if (input == null) throw new ArgumentNullException(nameof(input));
-            var settings = RequireSettings(input.settingsPath, out var settingsPath);
-            var groupName = RequireGroupName(input.groupName, "groupName");
-            var targetGroup = FindGroup(settings, groupName) ?? throw new ArgumentException("groupName does not identify an existing Addressables group.");
-            if (ReadBool(targetGroup, "ReadOnly")) throw new ArgumentException("groupName identifies a read-only Addressables group.");
-            var assetPath = NormalizeExistingAssetPath(input.assetPath, "assetPath");
-            if (AssetDatabase.IsValidFolder(assetPath)) throw new ArgumentException("assetPath must identify an asset, not a folder.");
-            if (IsResourcesPath(assetPath)) throw new ArgumentException("assetPath may not be under a Resources folder because Addressables manages those assets in a read-only built-in group.");
-            if (AssetDatabase.LoadMainAssetAtPath(assetPath) == null) throw new ArgumentException("assetPath must identify a loadable main asset.");
-            var guid = AssetDatabase.AssetPathToGUID(assetPath);
-            if (string.IsNullOrWhiteSpace(guid)) throw new ArgumentException("Unity could not resolve an asset GUID for assetPath.");
+            var settings = RequireSettings(settingsPath, out var resolvedSettingsPath);
+            var normalizedGroupName = RequireGroupName(groupName, "group-name");
+            var targetGroup = FindGroup(settings, normalizedGroupName) ?? throw new ArgumentException("group-name does not identify an existing Addressables group.");
+            if (ReadBool(targetGroup, "ReadOnly"))
+                throw new ArgumentException("group-name identifies a read-only Addressables group.");
+
+            var normalizedAssetPath = NormalizeExistingAssetPath(assetPath, "asset-path");
+            if (AssetDatabase.IsValidFolder(normalizedAssetPath))
+                throw new ArgumentException("asset-path must identify an asset, not a folder.");
+            if (IsResourcesPath(normalizedAssetPath))
+                throw new ArgumentException("asset-path may not be under a Resources folder because Addressables manages those assets in a read-only built-in group.");
+            if (AssetDatabase.LoadMainAssetAtPath(normalizedAssetPath) == null)
+                throw new ArgumentException("asset-path must identify a loadable main asset.");
+
+            var guid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
+            if (string.IsNullOrWhiteSpace(guid))
+                throw new ArgumentException("Unity could not resolve an asset GUID for asset-path.");
+
             var entry = FindAssetEntry(settings, guid);
             var previousGroup = entry == null ? null : GetMember(entry, "parentGroup");
             var previousGroupName = previousGroup == null ? null : ReadGroupName(previousGroup);
-            var requestedAddress = string.IsNullOrWhiteSpace(input.address) ? null : RequireAddress(input.address);
+            var requestedAddress = string.IsNullOrWhiteSpace(address) ? null : RequireAddress(address);
             var existingAddress = entry == null ? null : ReadString(entry, "address");
             var created = entry == null;
             var moved = entry == null || !SameUnityObject(previousGroup, targetGroup);
@@ -220,109 +308,185 @@ namespace DucMinh.UnityMcp.Editor
 
             var output = new AddressablesEntryAddOutput
             {
-                dryRun = context.DryRun,
-                changed = !context.DryRun && (created || moved || requestedAddress != null),
+                dryRun = dryRun,
+                changed = !dryRun && (created || moved || requestedAddress != null),
                 created = created,
                 moved = moved,
-                settingsPath = settingsPath,
-                groupName = groupName,
+                settingsPath = resolvedSettingsPath,
+                groupName = normalizedGroupName,
                 previousGroupName = previousGroupName,
-                assetPath = assetPath,
+                assetPath = normalizedAssetPath,
                 assetGuid = guid,
                 address = effectiveAddress,
                 rollbackSupported = true,
-                journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "add-addressables-entry", before = previousGroupName, after = groupName + ":" + assetPath } }
+                journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "add-addressables-entry", before = previousGroupName, after = normalizedGroupName + ":" + normalizedAssetPath } }
             };
-            if (context.DryRun) return output;
+            if (dryRun) return output;
 
             // Preserve the settings asset's revision when the requested entry is already in the
             // desired group and the caller did not ask to change its address.
             if (!created && !moved && requestedAddress == null) return output;
 
-            if (settings is UnityEngine.Object unitySettings) Undo.RecordObject(unitySettings, "UnityMCP Add Addressables Entry");
-            if (targetGroup is UnityEngine.Object unityGroup) Undo.RecordObject(unityGroup, "UnityMCP Add Addressables Entry");
-            if (previousGroup is UnityEngine.Object previousUnityGroup && !ReferenceEquals(previousUnityGroup, targetGroup)) Undo.RecordObject(previousUnityGroup, "UnityMCP Move Addressables Entry");
-            var changedEntry = CreateOrMoveEntry(settings, guid, targetGroup);
-            if (changedEntry == null) throw new InvalidOperationException("Addressables did not return an asset entry.");
-            if (requestedAddress != null) SetEntryAddress(changedEntry, requestedAddress);
-            if (settings is UnityEngine.Object dirtySettings) EditorUtility.SetDirty(dirtySettings);
-            if (targetGroup is UnityEngine.Object dirtyTargetGroup) EditorUtility.SetDirty(dirtyTargetGroup);
+            object changedEntry;
+            using (new AuthoringUndoScope("UnityMCP Add Addressables Entry"))
+            {
+                if (settings is UnityEngine.Object unitySettings) Undo.RecordObject(unitySettings, "UnityMCP Add Addressables Entry");
+                if (targetGroup is UnityEngine.Object unityGroup) Undo.RecordObject(unityGroup, "UnityMCP Add Addressables Entry");
+                if (previousGroup is UnityEngine.Object previousUnityGroup && !ReferenceEquals(previousUnityGroup, targetGroup))
+                    Undo.RecordObject(previousUnityGroup, "UnityMCP Move Addressables Entry");
+
+                changedEntry = CreateOrMoveEntry(settings, guid, targetGroup);
+                if (changedEntry == null) throw new InvalidOperationException("Addressables did not return an asset entry.");
+                if (requestedAddress != null) SetEntryAddress(changedEntry, requestedAddress);
+                if (settings is UnityEngine.Object dirtySettings) EditorUtility.SetDirty(dirtySettings);
+                if (targetGroup is UnityEngine.Object dirtyTargetGroup) EditorUtility.SetDirty(dirtyTargetGroup);
+            }
+
             AssetDatabase.SaveAssets();
             output.address = ReadString(changedEntry, "address");
             return output;
         }
 
-        [UnityMcpTool("addressables-entry-remove", Description = "Remove one existing writable Addressables entry without deleting its asset; dry-run unless apply is true.", Category = "project-extensions", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Destructive, SupportsDryRun = true, RequiredType = SettingsTypeName)]
-        public static AddressablesEntryRemoveOutput AddressablesEntryRemove(AddressablesEntryRemoveInput input, UnityMcpContext context)
+        internal static AddressablesEntryRemoveOutput RemoveEntryCore(
+            string assetPath,
+            string settingsPath = null,
+            bool confirm = false,
+            bool dryRun = false)
         {
-            if (input == null) throw new ArgumentNullException(nameof(input));
-            var settings = RequireSettings(input.settingsPath, out var settingsPath);
-            var assetPath = NormalizeExistingAssetPath(input.assetPath, "assetPath");
-            var guid = AssetDatabase.AssetPathToGUID(assetPath);
-            if (string.IsNullOrWhiteSpace(guid)) throw new ArgumentException("Unity could not resolve an asset GUID for assetPath.");
-            var entry = FindAssetEntry(settings, guid) ?? throw new ArgumentException("assetPath is not currently an Addressables entry.");
+            if (!dryRun && !confirm)
+                throw new ArgumentException("Refusing to remove Addressables entry without --confirm true (or pass --dry-run true to preview).");
+
+            var settings = RequireSettings(settingsPath, out var resolvedSettingsPath);
+            var normalizedAssetPath = NormalizeExistingAssetPath(assetPath, "asset-path");
+            var guid = AssetDatabase.AssetPathToGUID(normalizedAssetPath);
+            if (string.IsNullOrWhiteSpace(guid))
+                throw new ArgumentException("Unity could not resolve an asset GUID for asset-path.");
+
+            var entry = FindAssetEntry(settings, guid) ?? throw new ArgumentException("asset-path is not currently an Addressables entry.");
             var group = GetMember(entry, "parentGroup") ?? throw new InvalidOperationException("The Addressables entry has no parent group.");
-            if (ReadBool(group, "ReadOnly")) throw new ArgumentException("The Addressables entry belongs to a read-only group and cannot be removed by this tool.");
+            if (ReadBool(group, "ReadOnly"))
+                throw new ArgumentException("The Addressables entry belongs to a read-only group and cannot be removed by this tool.");
+
             var groupName = ReadGroupName(group);
             var address = ReadString(entry, "address");
             var output = new AddressablesEntryRemoveOutput
             {
-                dryRun = context.DryRun,
-                removed = !context.DryRun,
-                settingsPath = settingsPath,
+                dryRun = dryRun,
+                removed = !dryRun,
+                settingsPath = resolvedSettingsPath,
                 groupName = groupName,
-                assetPath = assetPath,
+                assetPath = normalizedAssetPath,
                 assetGuid = guid,
                 address = address,
                 rollbackSupported = true,
-                journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "remove-addressables-entry", before = groupName + ":" + assetPath } }
+                journal = new List<ChangeJournalEntry> { new ChangeJournalEntry { operation = "remove-addressables-entry", before = groupName + ":" + normalizedAssetPath } }
             };
-            if (context.DryRun) return output;
+            if (dryRun) return output;
 
-            if (settings is UnityEngine.Object unitySettings) Undo.RecordObject(unitySettings, "UnityMCP Remove Addressables Entry");
-            if (group is UnityEngine.Object unityGroup) Undo.RecordObject(unityGroup, "UnityMCP Remove Addressables Entry");
-            RemoveAssetEntry(settings, guid);
-            if (settings is UnityEngine.Object dirtySettings) EditorUtility.SetDirty(dirtySettings);
-            if (group is UnityEngine.Object dirtyGroup) EditorUtility.SetDirty(dirtyGroup);
+            using (new AuthoringUndoScope("UnityMCP Remove Addressables Entry"))
+            {
+                if (settings is UnityEngine.Object unitySettings) Undo.RecordObject(unitySettings, "UnityMCP Remove Addressables Entry");
+                if (group is UnityEngine.Object unityGroup) Undo.RecordObject(unityGroup, "UnityMCP Remove Addressables Entry");
+                RemoveAssetEntry(settings, guid);
+                if (settings is UnityEngine.Object dirtySettings) EditorUtility.SetDirty(dirtySettings);
+                if (group is UnityEngine.Object dirtyGroup) EditorUtility.SetDirty(dirtyGroup);
+            }
+
             AssetDatabase.SaveAssets();
             return output;
         }
 
-        [UnityMcpTool("addressables-build", Description = "Build Addressables player content with the project's configured default settings as a local job; dry-run unless apply is true. Cancellation is honored before the synchronous Unity build begins.", Category = "project-extensions", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Unsafe, SupportsDryRun = true, SupportsCancellation = true, ReturnsJob = true, RequiredType = SettingsTypeName, TimeoutMs = 600000)]
-        public static AddressablesBuildOutput AddressablesBuild(AddressablesBuildInput input, UnityMcpContext context)
+        internal static async Task<AddressablesBuildOutput> BuildCoreAsync(
+            string settingsPath = null,
+            bool confirm = false,
+            bool dryRun = false,
+            CancellationToken cancellationToken = default)
         {
-            if (input == null) throw new ArgumentNullException(nameof(input));
+            if (!dryRun && !confirm)
+                throw new ArgumentException("Refusing to build Addressables player content without --confirm true (or pass --dry-run true to preview).");
+
             if (EditorApplication.isCompiling || EditorApplication.isUpdating)
                 throw new InvalidOperationException("Addressables content cannot be built while the Unity Editor is compiling or updating.");
+
             var defaultSettings = RequireSettings(null, out var defaultSettingsPath);
-            if (!string.IsNullOrWhiteSpace(input.settingsPath))
+            if (!string.IsNullOrWhiteSpace(settingsPath))
             {
-                var requested = RequireSettings(input.settingsPath, out var requestedPath);
+                var requested = RequireSettings(settingsPath, out var requestedPath);
                 if (!SameUnityObject(defaultSettings, requested))
-                    throw new ArgumentException("settingsPath must identify the configured default Addressables settings because the public BuildPlayerContent API is static.");
+                    throw new ArgumentException("settings-path must identify the configured default Addressables settings because the public BuildPlayerContent API is static.");
                 defaultSettingsPath = requestedPath;
             }
+
             var buildMethod = ResolveBuildMethod();
-            if (context.DryRun)
+            if (dryRun)
             {
                 return new AddressablesBuildOutput
                 {
                     dryRun = true,
-                    settingsPath = defaultSettingsPath,
+                    accepted = false,
                     status = "dry-run",
+                    settingsPath = defaultSettingsPath,
                     summary = "Dry run: build Addressables player content using the configured default settings."
                 };
             }
 
-            var handle = EditorWorkflowJobRunner.Start(new AddressablesBuildOperation(buildMethod, defaultSettingsPath), "addressables-build", true);
-            return new AddressablesBuildOutput
+            // Yield one editor frame so cancellation and --detach Pipeline job tracking stay responsive before the synchronous Unity build begins.
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
             {
-                accepted = true,
-                jobId = handle.jobId,
-                status = handle.status,
-                settingsPath = defaultSettingsPath,
-                summary = "Addressables player-content build queued. Unity may be busy while its synchronous build runs."
-            };
+                object[] arguments = buildMethod.GetParameters().Length == 0 ? null : new object[] { null };
+                buildMethod.Invoke(null, arguments);
+                var result = arguments == null ? null : arguments[0];
+                var error = result == null ? null : ReadString(result, "Error");
+                if (!string.IsNullOrWhiteSpace(error))
+                    throw new InvalidOperationException("Addressables player-content build failed: " + SanitizeBuildError(error));
+
+                return new AddressablesBuildOutput
+                {
+                    dryRun = false,
+                    accepted = true,
+                    status = "succeeded",
+                    settingsPath = defaultSettingsPath,
+                    outputPath = result == null ? null : ReadString(result, "OutputPath"),
+                    contentStateFilePath = result == null ? null : ReadString(result, "ContentStateFilePath"),
+                    resultReported = result != null,
+                    summary = "Addressables player-content build succeeded."
+                };
+            }
+            catch (TargetInvocationException exception)
+            {
+                var detail = exception.InnerException == null ? exception.GetType().Name : exception.InnerException.GetType().Name;
+                Debug.LogWarning("UnityMCP Addressables build failed (" + detail + "). Details are available in the local Unity Console.");
+                throw new InvalidOperationException("Addressables player-content build failed. See the local Unity Console for details.", exception.InnerException ?? exception);
+            }
+        }
+
+        private static ExitCode Execute(CommandContext cmd, Func<object> action)
+        {
+            try
+            {
+                cmd.Result.Write(action());
+                return ExitCode.Success;
+            }
+            catch (TargetInvocationException ex)
+            {
+                var inner = ex.InnerException ?? ex;
+                cmd.Log.Error(inner.Message);
+                return inner is ArgumentException ? ExitCode.InvalidUsage : ExitCode.Failed;
+            }
+            catch (ArgumentException ex)
+            {
+                cmd.Log.Error(ex.Message);
+                return ExitCode.InvalidUsage;
+            }
+            catch (Exception ex)
+            {
+                cmd.Log.Error(ex.Message);
+                return ExitCode.Failed;
+            }
         }
 
         private static object RequireSettings(string requestedPath, out string settingsPath)
@@ -340,16 +504,17 @@ namespace DucMinh.UnityMcp.Editor
             }
             else
             {
-                var normalizedPath = NormalizeExistingAssetPath(requestedPath, "settingsPath");
-                if (!normalizedPath.EndsWith(".asset", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("settingsPath must identify an .asset file under Assets/.");
+                var normalizedPath = NormalizeExistingAssetPath(requestedPath, "settings-path");
+                if (!normalizedPath.EndsWith(".asset", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("settings-path must identify an .asset file under Assets/.");
                 settings = AssetDatabase.LoadAssetAtPath(normalizedPath, settingsType);
-                if (settings == null) throw new ArgumentException("settingsPath must identify an AddressableAssetSettings asset.");
+                if (settings == null) throw new ArgumentException("settings-path must identify an AddressableAssetSettings asset.");
             }
+
             if (!settingsType.IsInstanceOfType(settings)) throw new InvalidOperationException("The resolved Addressables settings object has an unexpected type.");
             var unitySettings = settings as UnityEngine.Object;
             settingsPath = unitySettings == null ? null : AssetDatabase.GetAssetPath(unitySettings);
             if (string.IsNullOrWhiteSpace(settingsPath)) throw new InvalidOperationException("The resolved Addressables settings object is not a persistent asset under this project.");
-            settingsPath = NormalizeExistingAssetPath(settingsPath, "settingsPath");
+            settingsPath = NormalizeExistingAssetPath(settingsPath, "settings-path");
             return settings;
         }
 
@@ -381,13 +546,14 @@ namespace DucMinh.UnityMcp.Editor
             if (string.IsNullOrWhiteSpace(requestedName))
             {
                 group = EnumerateGroups(settings).FirstOrDefault(candidate => ReadBool(candidate, "Default"));
-                if (group == null) throw new ArgumentException("templateGroupName is required because the configured Addressables settings have no default group.");
+                if (group == null) throw new ArgumentException("template-group-name is required because the configured Addressables settings have no default group.");
             }
             else
             {
-                var groupName = RequireGroupName(requestedName, "templateGroupName");
-                group = FindGroup(settings, groupName) ?? throw new ArgumentException("templateGroupName does not identify an existing Addressables group.");
+                var groupName = RequireGroupName(requestedName, "template-group-name");
+                group = FindGroup(settings, groupName) ?? throw new ArgumentException("template-group-name does not identify an existing Addressables group.");
             }
+
             resolvedName = ReadGroupName(group);
             return group;
         }
@@ -425,9 +591,10 @@ namespace DucMinh.UnityMcp.Editor
             foreach (var item in types)
             {
                 var type = item as Type;
-                if (type == null || !output.Contains(type)) continue;
+                if (type == null || output.Contains(type)) continue;
                 output.Add(type);
             }
+
             return output;
         }
 
@@ -457,71 +624,16 @@ namespace DucMinh.UnityMcp.Editor
         private static MethodInfo ResolveBuildMethod()
         {
             var settingsType = RequireType(SettingsTypeName);
-            var resultType = FindType(BuildResultTypeName);
+            var resultType = EditorCommandHelpers.TryResolveOptionalType(BuildResultTypeName);
             if (resultType != null)
             {
                 var withResult = settingsType.GetMethod("BuildPlayerContent", BindingFlags.Public | BindingFlags.Static, null, new[] { resultType.MakeByRefType() }, null);
                 if (withResult != null) return withResult;
             }
+
             var withoutResult = settingsType.GetMethod("BuildPlayerContent", BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null);
             if (withoutResult == null) throw new InvalidOperationException("The installed Addressables package does not expose AddressableAssetSettings.BuildPlayerContent().");
             return withoutResult;
-        }
-
-        private sealed class AddressablesBuildOperation : IEditorWorkflowOperation
-        {
-            private readonly MethodInfo buildMethod;
-            private readonly string settingsPath;
-            private bool started;
-
-            public AddressablesBuildOperation(MethodInfo buildMethod, string settingsPath)
-            {
-                this.buildMethod = buildMethod ?? throw new ArgumentNullException(nameof(buildMethod));
-                this.settingsPath = settingsPath;
-            }
-
-            // BuildPlayerContent is synchronous. A queued job permits status inspection and
-            // cancellation before Unity starts the build, but cannot interrupt the public API.
-            public bool DrainWhenCancelled => false;
-
-            public bool Tick(UnityMcpJob job)
-            {
-                if (job.IsCancellationRequested) return true;
-                if (started) return true;
-                started = true;
-                job.status = "running";
-                try
-                {
-                    object[] arguments = buildMethod.GetParameters().Length == 0 ? null : new object[] { null };
-                    buildMethod.Invoke(null, arguments);
-                    var result = arguments == null ? null : arguments[0];
-                    var error = result == null ? null : ReadString(result, "Error");
-                    if (!string.IsNullOrWhiteSpace(error))
-                    {
-                        EditorWorkflowJobRunner.Fail(job, "Addressables player-content build failed: " + SanitizeBuildError(error));
-                        return true;
-                    }
-                    EditorWorkflowJobRunner.Succeed(job, new
-                    {
-                        status = "succeeded",
-                        settingsPath,
-                        outputPath = result == null ? null : ReadString(result, "OutputPath"),
-                        contentStateFilePath = result == null ? null : ReadString(result, "ContentStateFilePath"),
-                        resultReported = result != null
-                    });
-                }
-                catch (TargetInvocationException exception)
-                {
-                    Debug.LogWarning("UnityMCP Addressables build failed (" + (exception.InnerException == null ? exception.GetType().Name : exception.InnerException.GetType().Name) + "). Details are available in the local Unity Console.");
-                    EditorWorkflowJobRunner.Fail(job, "Addressables player-content build failed. See the local Unity Console for details.");
-                }
-                catch (Exception exception)
-                {
-                    Debug.LogWarning("UnityMCP Addressables build operation failed (" + exception.GetType().Name + "). Details are available in the local Unity Console.");
-                    EditorWorkflowJobRunner.Fail(job, "Addressables player-content build failed. See the local Unity Console for details.");
-                }
-                return true;
-            }
         }
 
         private static string RequireGroupName(string value, string parameterName)
@@ -570,6 +682,7 @@ namespace DucMinh.UnityMcp.Editor
                 count++;
                 if (count == int.MaxValue) break;
             }
+
             return count;
         }
 
@@ -612,26 +725,13 @@ namespace DucMinh.UnityMcp.Editor
 
         private static Type RequireType(string fullName)
         {
-            return FindType(fullName) ?? throw new InvalidOperationException("Required optional Unity package type is unavailable: " + fullName + ".");
-        }
-
-        private static Type FindType(string fullName)
-        {
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                try
-                {
-                    var type = assembly.GetType(fullName, false);
-                    if (type != null) return type;
-                }
-                catch { }
-            }
-            return null;
+            return EditorCommandHelpers.TryResolveOptionalType(fullName)
+                ?? throw new InvalidOperationException("Required optional Unity package type is unavailable: " + fullName + ".");
         }
 
         private static bool ContainsControlCharacter(string value)
         {
-            return value.Any(character => char.IsControl(character));
+            return value.Any(char.IsControl);
         }
 
         private static string ProjectRoot => Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
@@ -663,7 +763,8 @@ namespace DucMinh.UnityMcp.Editor
         private static string SanitizeBuildError(string value)
         {
             var compact = new string((value ?? string.Empty).Where(character => !char.IsControl(character) || character == '\n' || character == '\r' || character == '\t').ToArray()).Trim();
-            return compact.Length <= MaximumBuildErrorLength ? compact : compact.Substring(0, MaximumBuildErrorLength) + "…";
+            return compact.Length <= MaximumBuildErrorLength ? compact : compact.Substring(0, MaximumBuildErrorLength) + "...";
         }
     }
 }
+#endif

@@ -1,7 +1,7 @@
 {
   "name": "DucMinh.UnityMcp.Runtime",
   "rootNamespace": "DucMinh.UnityMcp",
-  "references": ["Unity.Newtonsoft.Json"],
+  "references": ["Unity.Pipeline.Attributes", "Unity.Newtonsoft.Json"],
   "includePlatforms": [],
   "excludePlatforms": ["WebGL"],
   "allowUnsafeCode": false,

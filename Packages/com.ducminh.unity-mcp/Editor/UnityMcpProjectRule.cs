@@ -27,13 +27,11 @@ namespace DucMinh.UnityMcp.Editor
             error = null;
             try
             {
-                if (string.IsNullOrWhiteSpace(projectRoot))
-                    throw new ArgumentException("The Unity project root is required.", nameof(projectRoot));
-
-                var fullProjectRoot = Path.GetFullPath(projectRoot);
+                var fullProjectRoot = UnityMcpProjectConfigFile.NormalizeProjectRoot(projectRoot);
                 rulePath = Path.Combine(
                     fullProjectRoot,
                     RelativeRulePath(client).Replace('/', Path.DirectorySeparatorChar));
+                UnityMcpProjectConfigFile.EnsureSafeProjectPath(fullProjectRoot, rulePath);
 
                 if (File.Exists(rulePath)
                     && !File.ReadAllText(rulePath).Contains(ManagedMarker))
@@ -64,7 +62,7 @@ namespace DucMinh.UnityMcp.Editor
             try
             {
                 var rulePath = Path.Combine(
-                    Path.GetFullPath(projectRoot),
+                    UnityMcpProjectConfigFile.NormalizeProjectRoot(projectRoot),
                     RelativeRulePath(client).Replace('/', Path.DirectorySeparatorChar));
                 return File.Exists(rulePath) && File.ReadAllText(rulePath).Contains(ManagedMarker);
             }

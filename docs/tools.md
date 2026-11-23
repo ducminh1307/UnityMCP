@@ -1,673 +1,304 @@
-# UnityMCP tool reference
+# UnityMCP extension command reference
 
 > [!NOTE]
 > This file is generated from [`tool-catalog.json`](tool-catalog.json).
 > Run `python tools/generate_tool_reference.py` after changing the catalog.
 
-This page is the human-readable index of UnityMCP's built-in tools. The
-connected Unity instance remains the source of truth: an MCP client sees only
-tools that are implemented, valid for the current target, supported by installed
-packages, and enabled in **Window > UnityMCP > Tools**.
+This page indexes the `com.ducminh.unity-mcp` extension commands built on top of
+Unity's official `com.unity.pipeline` (`1.0.1`) package and invoked via the
+`unity` CLI (`unity command <group> <name>`) or `unity mcp --tool-groups`.
 
-The live MCP `tools/list` response is authoritative for each tool's current input
-schema and annotations. This reference explains purpose and availability without
-duplicating schemas that Unity generates at runtime.
+Built-in Unity Pipeline commands (`editor`, `scene`, `gameobject`, `component`,
+`prefab`, `asset`, `script`, `console`, `test`, `build`, `capture`, `lighting`,
+`navmesh`, `occlusion`, `animation.*`, `material`, `package`, `settings`, `job`,
+`diagnostics`, `authoring`, `pipeline`, `runtime`) are documented by
+`com.unity.pipeline` and listed live by `unity command`.
+
+Independent companion packages register their own Pipeline command groups directly
+when installed alongside `com.unity.pipeline` — for example, `com.ducminh.ui-maker`
+contributes the `ui_ai` group (10 declarative UI commands) via its optional
+`DucMinh.UiMaker.Editor.Pipeline` assembly without requiring `com.ducminh.unity-mcp`.
 
 ## At a glance
 
-- **195** cataloged tools in **20** categories.
-- **193** implemented tools and **2** planned tools.
-- **20** safe-read tools enabled in a fresh project.
-- Catalog version: 1.0.0.
+- **47** extension commands in **19** non-colliding groups.
+- **9** Runtime + Editor commands (`particle` creation/inspection/config/preview, `physics_ext`, `navmesh_ext`).
+- **38** Editor-only commands.
+- **18** package-gated commands compiled automatically via `versionDefines` when their Unity package is installed.
+- Catalog version: `0.2.0` (targeting `com.unity.pipeline` `1.0.1`).
+
+## Command effects and safety conventions
+
+| `CommandEffect` | MCP hints | Meaning |
+|---|---|---|
+| `ReadOnly` | `readOnlyHint: true` | Reads bounded state without changing the project or scene. |
+| `Idempotent` | `idempotentHint: true` | Repeatable mutation that leaves equivalent state and does not discard user work. |
+| `Additive` | all false | Creates new objects, groups, actions, or checkpoints. |
+| `Destructive` | `destructiveHint: true` | Can overwrite or remove state; requires `--confirm true` unless `--dry-run true`. |
+
+## CLI invocation workflow
+
+1. Verify the running Editor or Runtime Pipeline instance:
+   ```bash
+   unity status --format json
+   ```
+2. Inspect live groups, commands, and `--help` flags:
+   ```bash
+   unity command
+   unity command <group>
+   unity command <group> <name> --help
+   ```
+3. Preview supported mutations before applying with `--dry-run true` (default is `false` when omitted):
+   ```bash
+   unity command physics_ext set_collision_matrix --layer-a 0 --layer-b 8 --ignore true --dry-run true
+   ```
+4. Pass `--confirm true` on destructive or overwriting commands (`checkpoint restore`, `particle save_prefab --overwrite true`, `addressables remove_entry`, `addressables build`).
+5. Avoid passing reserved Pipeline executor flags (`--format`, `--json`, `--fields`, `--verbose`, `--omit-nulls`) as custom command parameters.
+
+## Groups
+
+- [Particle Systems (`particle`)](#particle) (5)
+- [Addressables (`addressables`)](#addressables) (5, `DM_ADDRESSABLES_PRESENT`)
+- [Localization (`localization`)](#localization) (3, `DM_LOCALIZATION_PRESENT`)
+- [Terrain (`terrain`)](#terrain) (2, `DM_TERRAIN_PRESENT`)
+- [2D Sprite (`sprite`)](#sprite) (1, `DM_2D_SPRITE_PRESENT`)
+- [2D Tilemap (`tilemap`)](#tilemap) (1, `DM_TILEMAP_PRESENT`)
+- [ProBuilder (`probuilder`)](#probuilder) (2, `DM_PROBUILDER_PRESENT`)
+- [Cinemachine (`cinemachine`)](#cinemachine) (1, `DM_CINEMACHINE_PRESENT`)
+- [VFX Graph (`vfxgraph`)](#vfxgraph) (1, `DM_VFXGRAPH_PRESENT`)
+- [Input System Actions (`input_actions`)](#input-actions) (2, `DM_INPUTSYSTEM_PRESENT`)
+- [Physics Extensions (`physics_ext`)](#physics-ext) (4)
+- [NavMesh Extensions (`navmesh_ext`)](#navmesh-ext) (1)
+- [UI Toolkit (`uitoolkit`)](#uitoolkit) (4)
+- [uGUI Raycast (`ugui`)](#ugui) (1)
+- [Scene Analysis Extensions (`scene_ext`)](#scene-ext) (2)
+- [Asset Graph Extensions (`asset_ext`)](#asset-ext) (2)
+- [Render & Texture Extensions (`render_ext`)](#render-ext) (3)
+- [Visual QA Extensions (`visual_ext`)](#visual-ext) (3)
+- [Scene Checkpoints (`checkpoint`)](#checkpoint) (4)
+
+<a id="particle"></a>
+
+## Particle Systems (`particle`)
+
+5 command(s) | Dependency: `com.unity.modules.particlesystem` | Gate: Always compiled.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `particle create` | editor, runtime | `Additive` | `com.unity.modules.particlesystem` | Create and configure a Shuriken ParticleSystem GameObject. |
+| `particle get` | editor, runtime | `ReadOnly` | `com.unity.modules.particlesystem` | Read supported Shuriken ParticleSystem module settings. |
+| `particle configure` | editor, runtime | `Idempotent` | `com.unity.modules.particlesystem` | Configure Shuriken ParticleSystem modules from JSON configuration. |
+| `particle preview` | editor, runtime | `Idempotent` | `com.unity.modules.particlesystem` | Play, stop, clear, or deterministically simulate a Shuriken ParticleSystem. |
+| `particle save_prefab` | editor | `Destructive` | `com.unity.modules.particlesystem` | Save a scene ParticleSystem GameObject as a prefab asset (requires --confirm true when overwriting). |
+
+<a id="addressables"></a>
+
+## Addressables (`addressables`)
+
+5 command(s) | Dependency: `com.unity.addressables` | Gate: `DM_ADDRESSABLES_PRESENT`.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `addressables list_groups` | editor | `ReadOnly` | `com.unity.addressables` | List Addressables groups and schema types from an existing settings asset without creating configuration. |
+| `addressables create_group` | editor | `Additive` | `com.unity.addressables` | Create one Addressables group by copying validated schema types from an existing template/default group. |
+| `addressables add_entry` | editor | `Idempotent` | `com.unity.addressables` | Add or move one existing non-Resources asset into a writable Addressables group, optionally setting its address. |
+| `addressables remove_entry` | editor | `Destructive` | `com.unity.addressables` | Remove one existing writable Addressables entry without deleting its asset (requires --confirm true unless --dry-run true). |
+| `addressables build` | editor | `Destructive` | `com.unity.addressables` | Build Addressables player content with the project's configured default settings (requires --confirm true unless --dry-run true). |
+
+<a id="localization"></a>
+
+## Localization (`localization`)
+
+3 command(s) | Dependency: `com.unity.localization` | Gate: `DM_LOCALIZATION_PRESENT`.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `localization list_tables` | editor | `ReadOnly` | `com.unity.localization` | List String Table collections and configured Localization locales. |
+| `localization get_entry` | editor | `ReadOnly` | `com.unity.localization` | Read localized String Table values and entry metadata for an existing key. |
+| `localization set_entry` | editor | `Idempotent` | `com.unity.localization` | Update existing String Table values across explicit locales with optimistic revision checking. |
+
+<a id="terrain"></a>
+
+## Terrain (`terrain`)
+
+2 command(s) | Dependency: `com.unity.modules.terrain` | Gate: `DM_TERRAIN_PRESENT`.
 
-## How to read the reference
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `terrain set_height` | editor | `Idempotent` | `com.unity.modules.terrain` | Apply a bounded normalized TerrainData height patch. |
+| `terrain paint_texture` | editor | `Idempotent` | `com.unity.modules.terrain` | Apply a bounded normalized TerrainData alphamap layer patch. |
 
-| Field | Meaning |
-|---|---|
-| Status | `implemented` has a compiled handler. `planned` is documented but never advertised by MCP. |
-| Scope | `editor`, `runtime` Development Player, or both. |
-| Safety | The permission and risk tier described below. |
-| Default | Whether a fresh project enables the tool automatically. |
-| Dependency | Unity core, Editor APIs, module, or optional package required by the handler. |
+<a id="sprite"></a>
 
-### Safety tiers
+## 2D Sprite (`sprite`)
 
-| Tier | Meaning |
-|---|---|
-| `safe-read` | Reads bounded state without intentionally changing the project or target. |
-| `write` | Changes state and requires local enablement. Where the live schema includes `apply`, preview first with `apply: false`. |
-| `destructive` | Deletes, reverts, replaces, or shuts down state; enable and call only with an explicit target. |
-| `unsafe` | Invokes powerful or broad operations such as allowlisted reflection, builds, or batch execution. |
+1 command(s) | Dependency: `com.unity.2d.sprite` | Gate: `DM_2D_SPRITE_PRESENT`.
 
-A tool being listed here does not grant permission to use it. Non-default tools
-must be enabled locally, and dependencies must be available in the connected
-project. Custom project tools are discovered dynamically and therefore do not
-appear in this built-in catalog; use `custom-tool-list` to inspect them.
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `sprite slice` | editor | `Idempotent` | `com.unity.2d.sprite` | Update validated existing Sprite Editor rectangles on a TextureImporter. |
 
-## Recommended call workflow
+<a id="tilemap"></a>
 
-1. Call `unity-status` to verify the target project and registry state.
-2. Use the narrowest read tool to identify stable object or asset references.
-3. Inspect the live input schema before constructing arguments.
-4. For a mutation whose schema supports dry-run, call it first with `apply: false`.
-5. Apply the smallest intended change, then verify it with a read tool.
-6. Poll `job-get` for operations that return a job identifier.
+## 2D Tilemap (`tilemap`)
 
-## Dry-run and change journal pattern
+1 command(s) | Dependency: `com.unity.modules.tilemap` | Gate: `DM_TILEMAP_PRESENT`.
 
-Mutating operations (`Safety: write` or `destructive`) that support previewing include
-an `apply` boolean parameter (default: `false`):
-
-- **Preview (`apply: false`)**: Simulates the operation, verifies preconditions, checks
-  target bounds, and outputs a `ChangeOutput` detailing planned modifications without changing
-  the scene, project assets, or disk state.
-- **Execution (`apply: true`)**: Performs the change, creates an Editor Undo record where
-  supported, marks target objects or assets dirty, and saves modifications.
-
-```json
-// Example ChangeOutput structure
-{
-  "dryRun": true,
-  "changed": false,
-  "summary": "Preview: set property 'size' on BoxCollider.",
-  "instanceId": 12345,
-  "journal": [
-    {
-      "operation": "setProperty",
-      "before": "{\"x\":1.0,\"y\":1.0,\"z\":1.0}",
-      "after": "{\"x\":2.0,\"y\":2.0,\"z\":2.0}"
-    }
-  ],
-  "rollbackSupported": true
-}
-```
-
-## Common workflows and payload examples
-
-### 1. Scene and GameObject inspection and manipulation
-
-#### Find GameObjects (`gameobject-find`)
-Search active or inactive scene objects by name, tag, or scene filter:
-```json
-{
-  "name": "Player",
-  "tag": "Player",
-  "includeInactive": true,
-  "limit": 10
-}
-```
-
-#### Inspect GameObject details (`gameobject-get`)
-Inspect transform hierarchies, active state, layers, and attached components:
-```json
-{
-  "path": "Environment/MainPlatform"
-}
-```
-
-#### Create a GameObject (`gameobject-create`)
-Spawn a new GameObject in the active scene under an optional parent:
-```json
-{
-  "name": "SpawnPoint",
-  "parentPath": "Environment",
-  "localPosition": { "x": 0.0, "y": 1.5, "z": 0.0 },
-  "apply": true
-}
-```
-
-#### Transform update (`gameobject-set-transform`)
-Update local or world coordinates, rotation angles, and scale:
-```json
-{
-  "path": "SpawnPoint",
-  "localPosition": { "x": 10.0, "y": 0.0, "z": -5.0 },
-  "localEulerAngles": { "x": 0.0, "y": 90.0, "z": 0.0 },
-  "apply": true
-}
-```
-
-### 2. Components and reflection
-
-#### Inspect component schema (`component-schema`)
-Query writable members and property types before modifying component fields:
-```json
-{
-  "type": "UnityEngine.BoxCollider"
-}
-```
-
-#### Read component properties (`component-get`)
-Inspect serialized field values of an attached component as JSON:
-```json
-{
-  "path": "SpawnPoint",
-  "type": "UnityEngine.BoxCollider"
-}
-```
-
-#### Add a component (`component-add`)
-Attach a component by full or short type name:
-```json
-{
-  "path": "SpawnPoint",
-  "type": "UnityEngine.BoxCollider",
-  "apply": true
-}
-```
-
-#### Set component field or property (`component-set-property`)
-Modify a serialized field or public property with typed JSON value:
-```json
-{
-  "path": "SpawnPoint",
-  "type": "UnityEngine.BoxCollider",
-  "property": "isTrigger",
-  "valueJson": "true",
-  "apply": true
-}
-```
-
-### 3. Prefabs and ScriptableObjects
-
-#### Inspect prefab metadata (`prefab-info`)
-Read prefab asset type, instance status, root name, and component counts:
-```json
-{
-  "path": "Assets/Prefabs/Enemy.prefab"
-}
-```
-
-#### Direct prefab asset edit (`prefab-edit`)
-Edit a prefab asset root or nested child, transform, or components without scene instantiation:
-```json
-{
-  "path": "Assets/Prefabs/Enemy.prefab",
-  "childPath": "Visuals/Mesh",
-  "active": true,
-  "componentType": "MeshRenderer",
-  "values": [
-    {
-      "property": "enabled",
-      "valueJson": "true"
-    }
-  ],
-  "apply": true
-}
-```
-
-#### Instantiate prefab into scene (`prefab-instantiate`)
-Instantiate a prefab asset into the active scene under a parent hierarchy:
-```json
-{
-  "path": "Assets/Prefabs/Enemy.prefab",
-  "parentPath": "Enemies",
-  "position": { "x": 0.0, "y": 0.0, "z": 10.0 },
-  "apply": true
-}
-```
-
-#### ScriptableObject create and edit (`scriptableobject-create` and `scriptableobject-set`)
-Instantiate and configure data container assets:
-```json
-{
-  "type": "GameSettings",
-  "path": "Assets/Data/GameSettings.asset",
-  "apply": true
-}
-```
-```json
-{
-  "path": "Assets/Data/GameSettings.asset",
-  "fields": [
-    {
-      "name": "masterVolume",
-      "valueJson": "0.8"
-    }
-  ],
-  "apply": true
-}
-```
-
-### 4. Console logs, compilation, and testing
-
-#### Read Console log entries (`console-read`)
-Filter Editor Console messages by severity (`error`, `warning`, `log`) or text search:
-```json
-{
-  "severity": "error",
-  "contains": "Exception",
-  "limit": 20
-}
-```
-
-#### Inspect compilation status and compiler errors (`compile-status` and `compile-errors`)
-Check domain-reload state or inspect structured C# compiler diagnostics:
-```json
-{
-  "includeWarnings": true
-}
-```
-
-#### Run EditMode or PlayMode tests (`test-run`)
-Execute tests filtered by namespace or class name and receive a job handle:
-```json
-{
-  "mode": "EditMode",
-  "filter": "DucMinh.UnityMcp"
-}
-```
-
-#### Poll asynchronous jobs (`job-get` or `test-job-get`)
-Poll long-running task status, progress, and results:
-```json
-{
-  "jobId": "test-run-1718000000"
-}
-```
-
-## Categories
-
-- [System & Editor](#system-editor) (13)
-- [Scene & GameObject](#scene-gameobject) (16)
-- [Components & Reflection](#components-reflection) (12)
-- [Assets & Importers](#assets-importers) (12)
-- [Prefab & ScriptableObject](#prefab-scriptableobject) (10)
-- [Scripts & Compilation](#scripts-compilation) (10)
-- [Console & Tests](#console-tests) (7)
-- [Packages & Build](#packages-build) (12)
-- [Material, Shader & Texture](#material-shader-texture) (10)
-- [Camera, Rendering & VFX](#camera-rendering-vfx) (17)
-- [UI](#ui) (8)
-- [Animation & Timeline](#animation-timeline) (8)
-- [Physics & Navigation](#physics-navigation) (8)
-- [Audio & Input](#audio-input) (7)
-- [Screenshot & Visual QA](#screenshot-visual-qa) (5)
-- [Profiler & Diagnostics](#profiler-diagnostics) (10)
-- [Custom & Automation](#custom-automation) (12)
-- [Project extensions](#project-extensions) (12)
-- [ProBuilder](#probuilder) (2)
-- [Runtime-only](#runtime-only) (4)
-
-<a id="system-editor"></a>
-
-## System & Editor
-
-13 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `unity-status` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Report bridge, registry, project, and target health. |
-| `project-info` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Read project identity, Unity version, platform, and paths safe to expose. |
-| `editor-state-get` | implemented | editor | safe-read | Yes | `unity-editor` | Read compilation, play mode, pause, and update state. |
-| `editor-play` | implemented | editor | write | No | `unity-editor` | Enter play mode after explicit opt-in. |
-| `editor-stop` | implemented | editor | write | No | `unity-editor` | Exit play mode after explicit opt-in. |
-| `editor-pause` | implemented | editor | write | No | `unity-editor` | Set or clear the Editor pause state. |
-| `editor-step` | implemented | editor | write | No | `unity-editor` | Advance one frame while play mode is paused. |
-| `editor-selection-get` | implemented | editor | safe-read | Yes | `unity-editor` | Read the active Editor selection. |
-| `editor-selection-set` | implemented | editor | write | No | `unity-editor` | Set the active Editor selection by stable object references. |
-| `editor-menu-execute` | implemented | editor | unsafe | No | `unity-editor` | Execute an allowlisted Unity Editor menu command. |
-| `editor-refresh` | implemented | editor | write | No | `unity-editor` | Refresh the AssetDatabase and report resulting compilation state. |
-| `editor-undo` | implemented | editor | write | No | `unity-editor` | Undo the most recent UnityMCP-compatible Editor operation. |
-| `editor-redo` | implemented | editor | write | No | `unity-editor` | Redo the most recently undone Editor operation. |
-
-<a id="scene-gameobject"></a>
-
-## Scene & GameObject
-
-16 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `scene-list` | implemented | editor, runtime | safe-read | Yes | `unity-core` | List loaded scenes and active-scene metadata. |
-| `scene-hierarchy` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Read a compact bounded hierarchy projection for one or more scenes. |
-| `scene-create` | implemented | editor | write | No | `unity-editor` | Dry-run or create a new scene asset. |
-| `scene-open` | implemented | editor | write | No | `unity-editor` | Dry-run or open a scene in single or additive mode. |
-| `scene-close` | implemented | editor | write | No | `unity-editor` | Close a loaded Editor scene with explicit dirty-scene handling. |
-| `scene-save` | implemented | editor | write | No | `unity-editor` | Dry-run or save a scene and return changed assets. |
-| `scene-set-active` | implemented | editor, runtime | write | No | `unity-core` | Set the active loaded scene. |
-| `scene-validate` | implemented | editor | safe-read | No | `unity-editor` | Find missing scripts, broken references, and common scene issues. |
-| `gameobject-find` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Find GameObjects with compact bounded name, tag, layer, path, or component filters. |
-| `gameobject-get` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Read identity, transform, properties, and component summaries. |
-| `gameobject-create` | implemented | editor, runtime | write | No | `unity-core` | Dry-run or create a GameObject with an optional parent. |
-| `gameobject-duplicate` | implemented | editor, runtime | write | No | `unity-core` | Duplicate a GameObject and return its new stable reference. |
-| `gameobject-delete` | implemented | editor, runtime | destructive | No | `unity-core` | Dry-run or delete a GameObject, using Undo in the Editor. |
-| `gameobject-set-parent` | implemented | editor, runtime | write | No | `unity-core` | Dry-run or reparent a GameObject with world-transform control. |
-| `gameobject-set-transform` | implemented | editor, runtime | write | No | `unity-core` | Dry-run or update local or world position, rotation, and scale. |
-| `gameobject-set-properties` | implemented | editor, runtime | write | No | `unity-core` | Dry-run or update name, active state, tag, layer, and static flags. |
-
-<a id="components-reflection"></a>
-
-## Components & Reflection
-
-12 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `component-types` | implemented | editor, runtime | safe-read | Yes | `unity-core` | List attachable component types visible to the target with compact defaults. |
-| `component-schema` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Return the writable and readable schema for a component type. |
-| `component-get` | implemented | editor, runtime | safe-read | Yes | `unity-core` | Read bounded serialized fields and supported properties from a component. |
-| `component-add` | implemented | editor, runtime | write | No | `unity-core` | Dry-run or add a component by validated type name. |
-| `component-remove` | implemented | editor, runtime | destructive | No | `unity-core` | Dry-run or remove a component, using Undo in the Editor. |
-| `component-set-property` | implemented | editor, runtime | write | No | `unity-core` | Dry-run or set one schema-validated component property. |
-| `component-set-properties` | implemented | editor, runtime | write | No | `unity-core` | Dry-run or atomically set several supported component properties. |
-| `object-get` | implemented | editor | safe-read | No | `unity-editor` | Read an allowlisted reflected Unity object projection. |
-| `object-set` | implemented | editor | unsafe | No | `unity-editor` | Set allowlisted reflected Unity object members. |
-| `method-find` | implemented | editor | safe-read | No | `unity-editor` | Find allowlisted reflected methods and their parameter schemas, auto-discovering a unique matching project allowlist when its path is omitted. |
-| `method-call` | implemented | editor | unsafe | No | `unity-editor` | Invoke an explicitly allowlisted reflected method. |
-| `type-schema` | implemented | editor, runtime | safe-read | No | `unity-core` | Describe a supported CLR or Unity value type as JSON Schema. |
-
-<a id="assets-importers"></a>
-
-## Assets & Importers
-
-12 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `asset-search` | implemented | editor | safe-read | Yes | `unity-editor` | Search project assets with bounded AssetDatabase filters. |
-| `asset-info` | implemented | editor | safe-read | Yes | `unity-editor` | Read GUID, type, path, labels, importer, and size metadata. |
-| `asset-dependencies` | implemented | editor | safe-read | Yes | `unity-editor` | List direct or recursive AssetDatabase dependencies. |
-| `asset-references` | implemented | editor | safe-read | No | `unity-editor` | Find project assets and scenes that reference a target asset. |
-| `asset-create-folder` | implemented | editor | write | No | `unity-editor` | Dry-run or create a folder inside Assets with path containment. |
-| `asset-import` | implemented | editor | write | No | `unity-editor` | Import a file already present under an allowed project path. |
-| `asset-reimport` | implemented | editor | write | No | `unity-editor` | Reimport a project asset and report importer diagnostics. |
-| `asset-copy` | implemented | editor | write | No | `unity-editor` | Dry-run or copy an asset with its metadata managed by Unity. |
-| `asset-move` | implemented | editor | write | No | `unity-editor` | Dry-run or move an asset while preserving its GUID. |
-| `asset-delete` | implemented | editor | destructive | No | `unity-editor` | Dry-run or delete a contained project asset and journal the change. |
-| `asset-import-settings-get` | implemented | editor | safe-read | No | `unity-editor` | Read supported importer settings for an asset. |
-| `asset-import-settings-set` | implemented | editor | write | No | `unity-editor` | Dry-run or update validated importer settings and reimport. |
-
-<a id="prefab-scriptableobject"></a>
-
-## Prefab & ScriptableObject
-
-10 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `prefab-info` | implemented | editor | safe-read | Yes | `unity-editor` | Read prefab type, source, overrides, and hierarchy metadata. |
-| `prefab-edit` | implemented | editor | write | No | `unity-editor` | Dry-run or edit a prefab asset root or child GameObject, serialized component fields, and public component properties. |
-| `prefab-create` | implemented | editor | write | No | `unity-editor` | Dry-run or create a prefab asset from a scene object. |
-| `prefab-instantiate` | implemented | editor | write | No | `unity-editor` | Dry-run or instantiate a prefab in an Editor scene. |
-| `prefab-apply` | implemented | editor | write | No | `unity-editor` | Dry-run or apply selected instance overrides to a prefab asset. |
-| `prefab-revert` | implemented | editor | destructive | No | `unity-editor` | Dry-run or revert selected prefab instance overrides. |
-| `prefab-unpack` | implemented | editor | destructive | No | `unity-editor` | Dry-run or unpack a prefab instance completely or one level. |
-| `scriptableobject-create` | implemented | editor | write | No | `unity-editor` | Create an asset from a concrete ScriptableObject type. |
-| `scriptableobject-get` | implemented | editor | safe-read | No | `unity-editor` | Read supported serialized fields from any ScriptableObject asset. |
-| `scriptableobject-set` | implemented | editor | write | No | `unity-editor` | Dry-run or update supported fields on a ScriptableObject asset. |
-
-<a id="scripts-compilation"></a>
-
-## Scripts & Compilation
-
-10 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `script-search` | implemented | editor | safe-read | No | `unity-editor` | Search C# source text inside contained project paths. |
-| `script-read` | implemented | editor | safe-read | No | `unity-editor` | Read bounded ranges from a contained project script. |
-| `script-create` | implemented | editor | write | No | `unity-editor` | Dry-run or create a C# script under an allowed project folder. |
-| `script-delete` | implemented | editor | destructive | No | `unity-editor` | Dry-run or delete a contained project script and its metadata. |
-| `script-apply-text-edits` | implemented | editor | write | No | `unity-editor` | Apply revision-checked text edits to a project script. |
-| `script-apply-structured-edits` | implemented | editor | write | No | `unity-editor` | Apply syntax-aware C# edits with conflict checks. |
-| `script-validate` | implemented | editor | safe-read | No | `unity-editor` | Parse and validate a script without mutating project files. |
-| `compile-status` | implemented | editor | safe-read | Yes | `unity-editor` | Read current compilation and domain-reload status. |
-| `compile-request` | implemented | editor | write | No | `unity-editor` | Request script compilation and return an asynchronous job. |
-| `compile-errors` | implemented | editor | safe-read | Yes | `unity-editor` | Read structured compiler errors and warnings. |
-
-<a id="console-tests"></a>
-
-## Console & Tests
-
-7 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `console-read` | implemented | editor | safe-read | Yes | `unity-editor` | Read compact bounded structured Unity Console entries. |
-| `console-clear` | implemented | editor | destructive | No | `unity-editor` | Clear Unity Console entries after explicit opt-in. |
-| `console-analyze` | implemented | editor | safe-read | No | `unity-editor` | Group and summarize Console entries by signature and severity with compact defaults. |
-| `test-list` | implemented | editor | safe-read | No | `com.unity.test-framework` | List available EditMode and PlayMode tests. |
-| `test-run` | implemented | editor | write | No | `com.unity.test-framework` | Start a filtered Unity Test Framework run. |
-| `test-job-get` | implemented | editor | safe-read | No | `com.unity.test-framework` | Read compact progress and failure-focused results for a test job. |
-| `test-cancel` | implemented | editor | write | No | `com.unity.test-framework` | Request cancellation of a running test job. |
-
-<a id="packages-build"></a>
-
-## Packages & Build
-
-12 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `package-list` | implemented | editor | safe-read | Yes | `com.unity.modules.package-manager-ui` | List installed Unity packages and resolved versions. |
-| `package-search` | implemented | editor | safe-read | No | `com.unity.modules.package-manager-ui` | Search package metadata available to Unity Package Manager. |
-| `package-add` | implemented | editor | unsafe | No | `com.unity.modules.package-manager-ui` | Add a package with an explicit identifier and version. |
-| `package-remove` | implemented | editor | destructive | No | `com.unity.modules.package-manager-ui` | Remove an explicitly identified project package. |
-| `package-resolve` | implemented | editor | unsafe | No | `com.unity.modules.package-manager-ui` | Resolve project packages and report dependency errors. |
-| `build-settings-get` | implemented | editor | safe-read | No | `unity-editor` | Read build scenes, target, options, and output settings. |
-| `build-settings-set` | implemented | editor | write | No | `unity-editor` | Dry-run or update supported build settings. |
-| `build-target-switch` | implemented | editor | unsafe | No | `unity-editor` | Switch the active build target as an asynchronous job. |
-| `build-player` | implemented | editor | unsafe | No | `unity-editor` | Build a player to a contained output path as a job. |
-| `build-job-get` | implemented | editor | safe-read | No | `unity-editor` | Read progress and bounded report details for a build job. |
-| `player-settings-get` | implemented | editor | safe-read | No | `unity-editor` | Read supported non-secret Player Settings for an active or selected target group. |
-| `player-settings-set` | implemented | editor | write | No | `unity-editor` | Dry-run or update a supported non-secret subset of Player Settings. |
-
-<a id="material-shader-texture"></a>
-
-## Material, Shader & Texture
-
-10 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `material-info` | implemented | editor | safe-read | Yes | `unity-core` | Read shader, keywords, render queue, and material properties. |
-| `material-create` | implemented | editor | write | No | `unity-editor` | Dry-run or create a material asset using a known shader. |
-| `material-set-property` | implemented | editor | write | No | `unity-core` | Dry-run or set a shader-declared material property. |
-| `material-assign` | implemented | editor | write | No | `unity-core` | Assign a material to a validated renderer slot. |
-| `shader-list` | implemented | editor | safe-read | No | `unity-editor` | List project and built-in shaders visible to the Editor. |
-| `shader-info` | implemented | editor | safe-read | No | `unity-editor` | Read shader properties, keywords, passes, and diagnostics. |
-| `shader-create` | implemented | editor | unsafe | No | `unity-editor` | Create a shader asset from a validated template. |
-| `shader-edit` | implemented | editor | unsafe | No | `unity-editor` | Apply revision-checked edits to a shader source asset. |
-| `texture-generate` | implemented | editor | write | No | `unity-editor` | Generate a bounded procedural texture asset. |
-| `texture-import-settings-set` | implemented | editor | write | No | `unity-editor` | Dry-run or update TextureImporter settings and reimport. |
-
-<a id="camera-rendering-vfx"></a>
-
-## Camera, Rendering & VFX
-
-17 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `camera-list` | implemented | editor, runtime | safe-read | No | `unity-core` | List enabled and disabled cameras with key properties. |
-| `camera-info` | implemented | editor, runtime | safe-read | No | `unity-core` | Read a camera's projection, viewport, culling, and output state. |
-| `camera-set` | implemented | editor, runtime | write | No | `unity-core` | Dry-run or update supported camera properties. |
-| `cinemachine-create` | implemented | editor | write | No | `com.unity.cinemachine` | Create and configure a Cinemachine camera. |
-| `render-pipeline-info` | implemented | editor | safe-read | No | `unity-core` | Report active render pipeline and pipeline asset metadata. |
-| `render-settings-get` | implemented | editor | safe-read | No | `unity-core` | Read supported RenderSettings values. |
-| `render-settings-set` | implemented | editor | write | No | `unity-core` | Dry-run or update supported RenderSettings values. |
-| `lighting-settings-get` | implemented | editor | safe-read | No | `unity-editor` | Read scene lighting and bake settings. |
-| `lighting-settings-set` | implemented | editor | write | No | `unity-editor` | Dry-run or update supported scene lighting settings. |
-| `lighting-bake` | implemented | editor | unsafe | No | `unity-editor` | Start or cancel an asynchronous lighting bake. |
-| `particle-create` | implemented | editor, runtime | write | No | `unity-core` | Create a Shuriken ParticleSystem GameObject with basic main-module settings. |
-| `particle-get` | implemented | editor, runtime | safe-read | No | `unity-core` | Read supported Shuriken ParticleSystem module settings. |
-| `particle-configure` | implemented | editor, runtime | write | No | `unity-core` | Configure typed Shuriken main, emission, shape, lifetime, noise, trails, collision, and renderer settings. |
-| `particle-preview` | implemented | editor, runtime | write | No | `unity-core` | Play, stop, clear, or deterministically simulate a Shuriken ParticleSystem. |
-| `particle-prefab-save` | implemented | editor | write | No | `unity-editor` | Save a scene ParticleSystem GameObject as a prefab asset. |
-| `particle-set` | implemented | editor, runtime | write | No | `unity-core` | Backward-compatible basic ParticleSystem main-module update. |
-| `vfxgraph-set` | implemented | editor | write | No | `com.unity.visualeffectgraph` | Update exposed parameters on a Visual Effect Graph component. |
-
-<a id="ui"></a>
-
-## UI
-
-8 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `ui-canvas-create` | implemented | editor | write | No | `com.unity.ugui` | Create a Canvas with validated render and scaling settings. |
-| `ui-element-create` | implemented | editor | write | No | `com.unity.ugui` | Create a supported uGUI element under a Canvas. |
-| `ui-element-set` | implemented | editor | write | No | `com.unity.ugui` | Update supported RectTransform and uGUI properties. |
-| `ui-raycast` | implemented | editor | safe-read | No | `com.unity.ugui` | Return UI raycast hits at a screen coordinate. |
-| `uitoolkit-scan` | implemented | editor | safe-read | No | `com.unity.ui` | Inspect a bounded UI Toolkit document and style tree. |
-| `uitoolkit-uxml-edit` | implemented | editor | write | No | `com.unity.ui` | Apply revision-checked structured edits to a UXML asset. |
-| `uitoolkit-uss-edit` | implemented | editor | write | No | `com.unity.ui` | Apply revision-checked structured edits to a USS asset. |
-| `uitoolkit-controller-scaffold` | implemented | editor | write | No | `com.unity.ui` | Scaffold a UI Toolkit controller from typed bindings. |
-
-<a id="animation-timeline"></a>
-
-## Animation & Timeline
-
-8 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `animation-clip-info` | implemented | editor | safe-read | No | `unity-editor` | Read animation clip metadata, bindings, and events. |
-| `animation-clip-create` | implemented | editor | write | No | `unity-editor` | Create an AnimationClip asset from typed curves. |
-| `animator-controller-create` | implemented | editor | write | No | `unity-editor` | Create an AnimatorController asset and base layer. |
-| `animator-state-add` | implemented | editor | write | No | `unity-editor` | Add a state with an optional motion to an Animator layer. |
-| `animator-transition-add` | implemented | editor | write | No | `unity-editor` | Add a validated Animator transition and conditions. |
-| `animator-parameter-set` | implemented | editor, runtime | write | No | `unity-core` | Set a runtime Animator parameter or edit controller parameters. |
-| `timeline-create` | implemented | editor | write | No | `com.unity.timeline` | Create a Timeline asset and optional PlayableDirector. |
-| `timeline-edit` | implemented | editor | write | No | `com.unity.timeline` | Edit supported Timeline tracks, clips, and bindings. |
-
-<a id="physics-navigation"></a>
-
-## Physics & Navigation
-
-8 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `physics-settings-get` | implemented | editor, runtime | safe-read | No | `unity-editor` | Read supported 3D and 2D physics project settings. |
-| `physics-settings-set` | implemented | editor, runtime | write | No | `unity-editor` | Dry-run or update supported physics project settings. |
-| `physics-collision-matrix-get` | implemented | editor, runtime | safe-read | No | `unity-editor` | Read the 3D or 2D layer collision matrix. |
-| `physics-collision-matrix-set` | implemented | editor, runtime | write | No | `unity-editor` | Dry-run or update selected collision matrix pairs. |
-| `physics-raycast` | implemented | editor, runtime | safe-read | No | `unity-core` | Perform a bounded physics raycast and return structured hits. |
-| `physics-overlap` | implemented | editor, runtime | safe-read | No | `unity-core` | Perform a bounded overlap query and return collider references. |
-| `navmesh-bake` | implemented | editor | unsafe | No | `com.unity.ai.navigation` | Bake NavMesh data as an asynchronous Editor job. |
-| `navmesh-path-calculate` | implemented | editor, runtime | safe-read | No | `com.unity.ai.navigation` | Calculate a NavMesh path between two world positions. |
-
-<a id="audio-input"></a>
-
-## Audio & Input
-
-7 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `audio-clip-info` | implemented | editor, runtime | safe-read | No | `unity-core` | Read duration, channels, frequency, load type, and format metadata. |
-| `audio-source-create` | implemented | editor, runtime | write | No | `unity-core` | Create and configure an AudioSource component. |
-| `audio-source-set` | implemented | editor, runtime | write | No | `unity-core` | Update supported AudioSource properties and playback state. |
-| `input-actions-get` | implemented | editor | safe-read | No | `com.unity.inputsystem` | Read action maps, actions, bindings, and control schemes. |
-| `input-action-create` | implemented | editor | write | No | `com.unity.inputsystem` | Add a typed action and bindings to an Input Actions asset. |
-| `input-simulate-key` | implemented | editor, runtime | unsafe | No | `com.unity.inputsystem` | Simulate an allowlisted keyboard input event for testing. |
-| `input-simulate-pointer` | implemented | editor, runtime | unsafe | No | `com.unity.inputsystem` | Simulate bounded pointer movement, buttons, or scroll for testing. |
-
-<a id="screenshot-visual-qa"></a>
-
-## Screenshot & Visual QA
-
-5 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `screenshot-game-view` | implemented | runtime | safe-read | No | `unity-core` | Capture a bounded Game view or Development Player screenshot. |
-| `screenshot-scene-view` | implemented | editor | safe-read | No | `unity-editor` | Capture the active Scene view at the current Game view size unless dimensions are specified. |
-| `screenshot-camera` | implemented | editor | safe-read | No | `unity-core` | Render one camera as an sRGB PNG at the current Game view size unless dimensions are specified. |
-| `screenshot-gameobject` | implemented | editor | safe-read | No | `unity-core` | Frame and capture a target GameObject using a temporary camera. |
-| `screenshot-multiview` | implemented | editor | safe-read | No | `unity-core` | Capture cameras as sRGB PNGs at the current Game view size unless dimensions are specified. |
-
-<a id="profiler-diagnostics"></a>
-
-## Profiler & Diagnostics
-
-10 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `profiler-start` | implemented | editor | write | No | `com.unity.modules.profiling.core` | Start a bounded profiler recording session. |
-| `profiler-stop` | implemented | editor | write | No | `com.unity.modules.profiling.core` | Stop a profiler recording and finalize its job result. |
-| `profiler-status` | implemented | editor | safe-read | No | `com.unity.modules.profiling.core` | Read profiler availability and recording status. |
-| `profiler-counters` | implemented | editor | safe-read | No | `com.unity.modules.profiling.core` | Sample an allowlisted bounded set of profiler counters. |
-| `profiler-frame-capture` | implemented | editor | safe-read | No | `com.unity.modules.profiling.core` | Capture structured samples for selected profiler frames. |
-| `memory-summary` | implemented | editor | safe-read | No | `com.unity.modules.profiling.core` | Read bounded managed, native, graphics, and asset memory totals. |
-| `memory-snapshot-create` | planned | editor | unsafe | No | `com.unity.memoryprofiler` | Create a memory snapshot as a cancellable job. |
-| `memory-snapshot-compare` | planned | editor | safe-read | No | `com.unity.memoryprofiler` | Compare two compatible memory snapshots. |
-| `frame-debugger-events` | implemented | editor | safe-read | No | `unity-editor` | Read bounded frame debugger event metadata. |
-| `scene-complexity-analyze` | implemented | editor | safe-read | No | `unity-editor` | Summarize scene renderers, triangles, lights, textures, and scripts. |
-
-<a id="custom-automation"></a>
-
-## Custom & Automation
-
-12 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `custom-tool-scaffold` | implemented | editor | write | No | `unity-editor` | Generate a disabled typed C# custom-tool skeleton from a specification. |
-| `custom-tool-validate` | implemented | editor | safe-read | No | `unity-editor` | Validate custom-tool signatures, schemas, names, and scope constraints. |
-| `custom-tool-list` | implemented | editor | safe-read | No | `unity-core` | List discovered project custom tools including disabled entries. |
-| `custom-tool-reload` | implemented | editor | write | No | `unity-editor` | Refresh custom-tool discovery after compilation. |
-| `batch-execute` | implemented | editor | unsafe | No | `unity-core` | Execute a bounded ordered batch with per-step results and dry-run support. |
-| `checkpoint-create` | implemented | editor | write | No | `unity-editor` | Create a UnityMCP change checkpoint for supported project state. |
-| `checkpoint-list` | implemented | editor | safe-read | No | `unity-editor` | List locally available UnityMCP checkpoints. |
-| `checkpoint-diff` | implemented | editor | safe-read | No | `unity-editor` | Compare a checkpoint with current supported project state. |
-| `checkpoint-restore` | implemented | editor | destructive | No | `unity-editor` | Restore explicitly selected state from a checkpoint. |
-| `job-get` | implemented | editor, runtime | safe-read | No | `unity-core` | Read state, progress, bounded result, or error for a bridge job. |
-| `job-cancel` | implemented | editor, runtime | write | No | `unity-core` | Request cancellation for a job that declares cancellation support and return bounded job details. |
-| `execute-csharp` | implemented | editor | unsafe | No | `unity-editor` | Invoke an explicitly allowlisted project C# command; never compile or evaluate source text. |
-
-<a id="project-extensions"></a>
-
-## Project extensions
-
-12 tools.
-
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `addressables-groups-list` | implemented | editor | safe-read | No | `com.unity.addressables` | List Addressables groups, schemas, and entry counts. |
-| `addressables-group-create` | implemented | editor | write | No | `com.unity.addressables` | Create an Addressables group with validated schemas. |
-| `addressables-entry-add` | implemented | editor | write | No | `com.unity.addressables` | Add or move an asset entry into an Addressables group. |
-| `addressables-entry-remove` | implemented | editor | destructive | No | `com.unity.addressables` | Remove an asset entry from Addressables settings. |
-| `addressables-build` | implemented | editor | unsafe | No | `com.unity.addressables` | Build Addressables content as an asynchronous job. |
-| `localization-table-list` | implemented | editor | safe-read | No | `com.unity.localization` | List localization table collections and locales. |
-| `localization-entry-get` | implemented | editor | safe-read | No | `com.unity.localization` | Read localized values and metadata for an entry. |
-| `localization-entry-set` | implemented | editor | write | No | `com.unity.localization` | Set localized values for an entry across selected locales. |
-| `terrain-height-set` | implemented | editor | write | No | `com.unity.modules.terrain` | Apply a bounded height patch to TerrainData. |
-| `terrain-texture-paint` | implemented | editor | write | No | `com.unity.modules.terrain` | Apply bounded Terrain layer alphamap edits. |
-| `sprite-slice` | implemented | editor | write | No | `com.unity.modules.imageconversion` | Set validated sprite rectangles in a TextureImporter. |
-| `tilemap-set-tiles` | implemented | editor | write | No | `com.unity.2d.tilemap` | Set a bounded region of Tilemap cells from stable tile references. |
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `tilemap set_tiles` | editor | `Idempotent` | `com.unity.modules.tilemap` | Set or clear a bounded set of Tilemap cells from stable TileBase asset paths. |
 
 <a id="probuilder"></a>
 
-## ProBuilder
+## ProBuilder (`probuilder`)
 
-2 tools.
+2 command(s) | Dependency: `com.unity.probuilder` | Gate: `DM_PROBUILDER_PRESENT`.
 
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `probuilder-create` | implemented | editor | write | No | `com.unity.probuilder` | Create a validated ProBuilder primitive or mesh. |
-| `probuilder-edit` | implemented | editor | write | No | `com.unity.probuilder` | Apply bounded topology or vertex edits to a ProBuilder mesh. |
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `probuilder create` | editor | `Additive` | `com.unity.probuilder` | Create one ProBuilder cube with validated dimensions, transform, and optional scene parent. |
+| `probuilder edit` | editor | `Idempotent` | `com.unity.probuilder` | Translate a bounded, validated set of ProBuilderMesh local vertices using ProBuilder's VertexPositioning API. |
 
-<a id="runtime-only"></a>
+<a id="cinemachine"></a>
 
-## Runtime-only
+## Cinemachine (`cinemachine`)
 
-4 tools.
+1 command(s) | Dependency: `com.unity.cinemachine` | Gate: `DM_CINEMACHINE_PRESENT`.
 
-| Tool | Status | Scope | Safety | Default | Dependency | Description |
-|---|---|---|---|---|---|---|
-| `runtime-state-get` | implemented | runtime | safe-read | No | `unity-core` | Read Development Player state, scene, frame, and timing metadata. |
-| `runtime-time-scale-get` | implemented | runtime | safe-read | No | `unity-core` | Read the Development Player time scale and timing values. |
-| `runtime-time-scale-set` | implemented | runtime | write | No | `unity-core` | Set Development Player time scale within configured limits. |
-| `runtime-quit` | implemented | runtime | destructive | No | `unity-core` | Request an orderly Development Player shutdown. |
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `cinemachine create` | editor | `Additive` | `com.unity.cinemachine` | Create a Cinemachine 3 CinemachineCamera with optional parent, Follow, LookAt, and priority. |
+
+<a id="vfxgraph"></a>
+
+## VFX Graph (`vfxgraph`)
+
+1 command(s) | Dependency: `com.unity.visualeffectgraph` | Gate: `DM_VFXGRAPH_PRESENT`.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `vfxgraph set` | editor | `Idempotent` | `com.unity.visualeffectgraph` | Set validated exposed bool, int, float, Vector2, Vector3, or Vector4 Visual Effect Graph overrides. |
+
+<a id="input-actions"></a>
+
+## Input System Actions (`input_actions`)
+
+2 command(s) | Dependency: `com.unity.inputsystem` | Gate: `DM_INPUTSYSTEM_PRESENT`.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `input_actions get` | editor | `ReadOnly` | `com.unity.inputsystem` | Read action maps, actions, bindings, and control schemes from an Input Actions asset. |
+| `input_actions create_action` | editor | `Additive` | `com.unity.inputsystem` | Add a typed action with simple bindings to an existing Input Actions map. |
+
+<a id="physics-ext"></a>
+
+## Physics Extensions (`physics_ext`)
+
+4 command(s) | Dependency: `com.unity.modules.physics` | Gate: Always compiled.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `physics_ext get_collision_matrix` | editor, runtime | `ReadOnly` | `com.unity.modules.physics` | Read the 3D physics layer collision matrix. |
+| `physics_ext set_collision_matrix` | editor, runtime | `Idempotent` | `com.unity.modules.physics` | Set one 3D physics layer collision relationship. |
+| `physics_ext raycast` | editor, runtime | `ReadOnly` | `com.unity.modules.physics` | Perform a bounded 3D physics raycast. |
+| `physics_ext overlap` | editor, runtime | `ReadOnly` | `com.unity.modules.physics` | Perform a bounded sphere or box overlap query. |
+
+<a id="navmesh-ext"></a>
+
+## NavMesh Extensions (`navmesh_ext`)
+
+1 command(s) | Dependency: `com.unity.modules.ai` | Gate: Always compiled.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `navmesh_ext calculate_path` | editor, runtime | `ReadOnly` | `com.unity.modules.ai` | Calculate a bounded NavMesh path between world positions using already-loaded NavMesh data. |
+
+<a id="uitoolkit"></a>
+
+## UI Toolkit (`uitoolkit`)
+
+4 command(s) | Dependency: `unity-editor` | Gate: Always compiled.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `uitoolkit scan` | editor | `ReadOnly` | `unity-editor` | Inspect a bounded UI Toolkit UXML document tree and its declared style sheet sources. |
+| `uitoolkit edit_uxml` | editor | `Idempotent` | `unity-editor` | Apply revision-checked bounded text edits to a valid UXML asset. |
+| `uitoolkit edit_uss` | editor | `Idempotent` | `unity-editor` | Apply revision-checked bounded text edits to a syntactically balanced USS asset. |
+| `uitoolkit scaffold_controller` | editor | `Additive` | `unity-editor` | Scaffold a bounded UI Toolkit MonoBehaviour controller with named VisualElement bindings. |
+
+<a id="ugui"></a>
+
+## uGUI Raycast (`ugui`)
+
+1 command(s) | Dependency: `com.unity.ugui` | Gate: Always compiled.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `ugui raycast` | editor | `ReadOnly` | `com.unity.ugui` | Return Canvas RectTransforms containing a screen point. |
+
+<a id="scene-ext"></a>
+
+## Scene Analysis Extensions (`scene_ext`)
+
+2 command(s) | Dependency: `unity-editor` | Gate: Always compiled.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `scene_ext validate` | editor | `ReadOnly` | `unity-editor` | Validate references and optional lifecycle hazards in one loaded scene. |
+| `scene_ext analyze_complexity` | editor | `ReadOnly` | `unity-editor` | Analyze loaded scene hierarchy, components, renderers, and mesh complexity. |
+
+<a id="asset-ext"></a>
+
+## Asset Graph Extensions (`asset_ext`)
+
+2 command(s) | Dependency: `unity-editor` | Gate: Always compiled.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `asset_ext get_dependencies` | editor | `ReadOnly` | `unity-editor` | List direct or recursive asset dependencies. |
+| `asset_ext find_references` | editor | `ReadOnly` | `unity-editor` | Find project assets with a direct AssetDatabase dependency on a target asset. |
+
+<a id="render-ext"></a>
+
+## Render & Texture Extensions (`render_ext`)
+
+3 command(s) | Dependency: `unity-editor` | Gate: Always compiled.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `render_ext get_settings` | editor | `ReadOnly` | `unity-editor` | Read active-scene render and ambient lighting settings. |
+| `render_ext set_settings` | editor | `Idempotent` | `unity-editor` | Set active-scene render and ambient lighting settings. |
+| `render_ext generate_texture` | editor | `Additive` | `unity-editor` | Generate a solid PNG texture asset under Assets/. |
+
+<a id="visual-ext"></a>
+
+## Visual QA Extensions (`visual_ext`)
+
+3 command(s) | Dependency: `unity-editor` | Gate: Always compiled.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `visual_ext capture_gameobject` | editor | `ReadOnly` | `unity-editor` | Capture Unity's generated preview image for a GameObject or Component as PNG. |
+| `visual_ext capture_multiview` | editor | `ReadOnly` | `unity-editor` | Capture several loaded Cameras as PNG images. |
+| `visual_ext frame_debugger_events` | editor | `ReadOnly` | `unity-editor` | Read currently available Unity Frame Debugger events without enabling or changing the debugger. |
+
+<a id="checkpoint"></a>
+
+## Scene Checkpoints (`checkpoint`)
+
+4 command(s) | Dependency: `unity-editor` | Gate: Always compiled.
+
+| Command | Scope | Effect | Dependency | Description |
+|---|---|---|---|---|
+| `checkpoint create` | editor | `Additive` | `unity-editor` | Create a bounded on-disk snapshot of an Assets/*.unity scene under Library/UnityMCP/checkpoints. |
+| `checkpoint list` | editor | `ReadOnly` | `unity-editor` | List valid UnityMCP scene checkpoints stored under Library/UnityMCP/checkpoints. |
+| `checkpoint diff` | editor | `ReadOnly` | `unity-editor` | Compare a checkpoint with its Assets/*.unity source scene using hashes and a bounded line-by-line diff. |
+| `checkpoint restore` | editor | `Destructive` | `unity-editor` | Restore an unloaded, clean Assets/*.unity scene from a local checkpoint (requires --confirm true unless --dry-run true). |
 
 ## Related documentation
 
-- [Custom tools](custom-tools.md)
+- [README](../README.md)
 - [Architecture](architecture.md)
-- [Protocol](protocol.md)
+- [Custom commands](custom-tools.md)
 - [Security](security.md)
 - [Canonical JSON catalog](tool-catalog.json)

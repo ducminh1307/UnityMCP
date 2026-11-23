@@ -1,130 +1,93 @@
 # Architecture
 
-UnityMCP deliberately separates MCP transport from Unity execution. The Python
-gateway owns MCP protocol concerns; the Unity package owns discovery, schemas,
-permissions, and execution. There is no second, static Python tool registry.
+`com.ducminh.unity-mcp` (`0.2.0`) builds directly on Unity's official **`unity` CLI**
+and **`com.unity.pipeline`** (`1.0.1`) instead of maintaining a custom Python
+gateway or HTTP bridge. Unity owns command discovery, JSON Schema generation,
+execution, and loopback security; the `unity` CLI owns process discovery,
+CLI command invocation, and stdio MCP hosting (`unity mcp`).
 
 ```mermaid
 flowchart LR
-    Client["MCP client"] -->|"stdio or HTTP /mcp"| Gateway["Python gateway"]
-    EditorUi["Unity Editor UI Toolkit window"] -->|"optional owned HTTP child process"| Gateway
-    Gateway -->|"authenticated loopback HTTP"| Bridge["Unity bridge"]
-    Bridge --> Registry["dynamic registry"]
-    Registry --> Builtins["built-in tools"]
-    Registry --> Project["project custom tools"]
-    Bridge --> Editor["Unity Editor"]
-    Bridge --> Player["desktop Development Player"]
+    Shell["Shell / Agent CLI"] -->|"unity status / command / recompile / test"| UnityCli["Official Unity CLI (unity)"]
+    McpClient["MCP Client (Antigravity / Codex / Claude)"] -->|"stdio JSON-RPC"| UnityMcp["unity mcp --tool-groups"]
+    UnityMcp --> UnityCli
+    UnityCli -->|"127.0.0.1 HTTP + evalToken"| Pipeline["com.unity.pipeline Server"]
+    Pipeline --> Registry["CommandRegistry (TypeCache / Reflection)"]
+    Registry --> Builtins["23 Built-in Pipeline Groups"]
+    Registry --> Extensions["19 com.ducminh.unity-mcp Groups (47 Commands)"]
+    Registry --> Project["Project / Companion Package Commands (e.g. ui_ai)"]
+    Pipeline --> Editor["Unity Editor"]
+    Pipeline --> Player["Development Player (opt-in)"]
 ```
 
-## Process and instance model
+## Process and discovery model
 
-One gateway connects to exactly one Editor or Player. Each Unity process writes a
-descriptor containing `port`, a random bearer `token`, `pid`, `projectId`, unique
-`instanceId`, `kind` (`editor` or `player`), and `buildId`. Descriptor files live
-in an OS application-data directory, outside the project. Their file permissions
-must be user-only where the operating system supports it.
+- **Instance discovery & auth**: `com.unity.pipeline` writes an instance port
+  descriptor to `<projectRoot>/Library/Pipeline/.unity-pipeline-port` (or
+  `.unity-pipeline-runtime-port` beside a development Player) containing the
+  loopback port and `evalToken`. Only `unity` CLI reads `evalToken` and speaks
+  authenticated loopback HTTP (`127.0.0.1`) to the running Editor or Player.
+- **Editor UI (`Window > UnityMCP > Tools`)**: `UnityCliDiscovery` detects the
+  `unity` executable, probes `unity --version` asynchronously off the UI thread,
+  reads `Library/Pipeline/.unity-pipeline-port` via `JsonTextReader` while
+  explicitly skipping `evalToken`, and lists non-built-in `[CliGroupCommand]` /
+  `[CliCommand]` commands discovered via `TypeCache`.
+- **Token-free client setup**: `UnityMcpJsonProjectConfig` (`.agents/mcp_config.json`,
+  `.mcp.json`) and `UnityMcpCodexProjectConfig` (`.codex/config.toml`) configure
+  the `"unity"` stdio MCP server (`unity mcp --tool-groups --project-path <projectRoot>`),
+  stripping any legacy HTTP URLs or bearer headers. Client setup also installs
+  managed `unity-mcp` skills/rules and Antigravity's `AGENTS.md` block.
 
-Gateway ownership is explicit:
+## Assembly boundaries and package gating
 
-| Mode | Started by | MCP transport | Instance behavior |
-|---|---|---|---|
-| Client-managed (default) | MCP client | stdio | The Python gateway discovers one instance, or requires `--instance` when discovery is ambiguous. |
-| Editor-managed (optional) | **Window > UnityMCP > Tools** UI Toolkit window | Streamable HTTP at `/mcp` | The Editor supplies its own descriptor's `instanceId`; the launcher never chooses a different open project. |
+| Assembly | References | Purpose |
+|---|---|---|
+| `DucMinh.UnityMcp.Runtime` | `Unity.Pipeline.Attributes`, `Unity.Newtonsoft.Json` | 9 Runtime+Editor commands (`particle` create/get/configure/preview, `physics_ext`, `navmesh_ext`) and `RuntimeCommandHelpers`. |
+| `DucMinh.UnityMcp.Editor` | `Unity.Pipeline.Attributes`, `Unity.Pipeline`, `Unity.Pipeline.Editor`, `DucMinh.UnityMcp.Runtime`, `UnityEngine.UI` | 38 Editor commands, `UnityCliDiscovery`, `UnityMcpToolsWindow`, project config/rule/skill writers, and `EditorCommandHelpers`. |
+| `DucMinh.UnityMcp.Editor.Tests` | `Unity.Pipeline.*`, `DucMinh.UnityMcp.*`, `UnityEngine.UI` | EditMode tests for core command logic, discovery, and config/rule/skill writers. |
 
-Instances of the same project share `projectId`, but never share a registry or
-job namespace. If discovery finds multiple live instances and no `--instance`
-was supplied, the gateway refuses to choose. Stale descriptors whose PID or
-health check no longer matches are ignored.
+`DucMinh.UnityMcp.Runtime.asmdef` intentionally references **only** `Unity.Pipeline.Attributes`
+(which has no `defineConstraints`) and **never** references `Unity.Pipeline` or
+`UnityEditor`. Non-development Release Player builds compile cleanly with zero
+Pipeline server code when **Project Settings > Pipeline > Runtime** toggles are off.
 
-The gateway is stdio-first. Streamable HTTP is optional, is exposed at `/mcp`,
-and always binds `127.0.0.1`. The Unity bridge also binds loopback only. Node.js
-is not part of the runtime or build toolchain.
+Optional package commands inside `DucMinh.UnityMcp.Editor` are guarded by
+`versionDefines` symbols in `DucMinh.UnityMcp.Editor.asmdef`:
 
-### Editor-managed HTTP lifecycle and isolation
+- `DM_ADDRESSABLES_PRESENT` (`com.unity.addressables`) -> `addressables` (5)
+- `DM_LOCALIZATION_PRESENT` (`com.unity.localization`) -> `localization` (3)
+- `DM_TERRAIN_PRESENT` (`com.unity.modules.terrain`) -> `terrain` (2)
+- `DM_2D_SPRITE_PRESENT` (`com.unity.2d.sprite`) -> `sprite` (1)
+- `DM_TILEMAP_PRESENT` (`com.unity.modules.tilemap`) -> `tilemap` (1)
+- `DM_PROBUILDER_PRESENT` (`com.unity.probuilder`) -> `probuilder` (2)
+- `DM_CINEMACHINE_PRESENT` (`com.unity.cinemachine`) -> `cinemachine` (1)
+- `DM_VFXGRAPH_PRESENT` (`com.unity.visualeffectgraph`) -> `vfxgraph` (1)
+- `DM_INPUTSYSTEM_PRESENT` (`com.unity.inputsystem`) -> `input_actions` (2)
 
-The UI Toolkit panel lets a user choose the gateway executable, a preferred port, and
-the MCP path, then start, stop, configure Codex, Antigravity, or Claude Code for only
-the current project, copy client configuration, or regenerate the HTTP bearer secret.
-The managed client paths are `.codex/config.toml`, `.agents/mcp_config.json`, and
-`.mcp.json`; global client settings are never changed. All gateway configuration is
-local per user/project rather than a Unity asset. The panel renders process state
-(`Stopped`, `Starting`, `Running`, or `Error`) without rendering the secret itself.
+Optional SDK integrations resolve types via reflection inside their `#if DM_*_PRESENT`
+guard so `DucMinh.UnityMcp.Editor` needs no extra hard `.asmdef` assembly references.
+Independent companion packages (such as `com.ducminh.ui-maker` providing `ui_ai`)
+ship their own `com.unity.pipeline`-gated assemblies and are discovered automatically.
 
-Each client configuration action also installs a project-only Agent Skill and Rule. Codex and
-Antigravity share `.agents/skills/unity-mcp` and `.agents/rules/unity-mcp.md`; Antigravity also
-gets a managed, preserved block in root `AGENTS.md`, its persistent workspace context rather than
-an on-demand skill. Claude Code uses
-`.claude/skills/unity-mcp` and `.claude/rules/unity-mcp.md`. The skill and rule metadata are deliberately
-broad enough to trigger for live Unity state, implementation, debugging, and verification tasks,
-directing the agent to always prioritize UnityMCP tools and only fall back to project files when an MCP tool
-returns an error or is unavailable. Skills and rules are token-free and may be versioned independently of the
-locally excluded authenticated MCP configuration.
+## Command execution and concurrency
 
-Starting a gateway creates one child Python process with `--transport
-streamable-http`, the current Editor's explicit `--instance`, and `--parent-pid` set to
-the Editor process. The HTTP server emits a readiness event only after its loopback
-socket is bound; the Editor then marks it `Running`. The parent-PID watcher makes the
-Python process exit after three consecutive failed liveness checks when its originating
-Editor is gone. During a domain reload the gateway remains alive while the Unity bridge
-rebinds with the same session descriptor. It reports a temporary retryable reload state,
-reconnects automatically, and the new Editor domain reattaches ownership only after an
-asynchronous HTTP probe confirms the recovered listener. Unexpected process exits and
-failed HTTP probes retain the desired-running intent and retry the exact existing port/path
-up to six times with bounded exponential backoff. An explicit stop or Editor shutdown clears
-that intent and stops the child permanently.
+- Commands declare `[CliGroupCommand(group, description, Name = ..., Effect = ..., Tags = ...)]`
+  and take `CommandContext` first, returning `ExitCode` or `Task<ExitCode>`.
+- `MainThreadRequired` defaults to `true`; `com.unity.pipeline` marshals calls to
+  Unity's main thread. Long operations (such as `addressables build`) return
+  `async Task<ExitCode>`, yield frames with `await Task.Yield()`, and honor
+  `cmd.CancellationToken` (supporting synchronous execution or `unity command --detach`).
+- Scene/object mutations wrap edits in `AuthoringUndoScope` for single-step Undo.
+- `visual_ext` (`capture_gameobject`, `capture_multiview`) uses
+  `EditorCommandHelpers.WriteCapturedPng`: when no output path is given, PNGs
+  write under `Temp/` and return inline `base64`; when an output path is specified,
+  inline `base64` is omitted unless `--include-inline-image true` is passed.
 
-Port assignment is per running gateway. If a project's preferred port is already in
-use, its launcher selects another free loopback port, so two Editors may both use the
-same preference without sharing an endpoint. The actual endpoint and token must be
-obtained through **Copy client config** after each gateway starts. A client that works
-with multiple projects must configure one named HTTP MCP connection per copied endpoint;
-one connection never multiplexes or auto-selects between Unity projects.
+## Catalog validation contract
 
-## Registry ownership and lifecycle
-
-Unity is the single source of truth. Each descriptor includes JSON Schemas and
-execution metadata for its tool. The Python gateway validates the registry,
-builds an immutable snapshot, and exposes only entries that are:
-
-1. implemented by the connected target;
-2. valid after discovery and schema validation;
-3. enabled by the user's local profile; and
-4. in scope for that target (`editor` or `runtime`).
-
-The documented [tool catalog](tool-catalog.json) is a product roadmap and CI
-contract, not a fallback registry. A `planned` entry must never appear in MCP
-`tools/list` until Unity actually reports an implementation.
-
-Registry refresh uses `ETag` and `registryRevision`. A changed snapshot is swapped
-atomically, then the gateway emits the MCP tool-list-changed notification. During
-an Editor domain reload, the last valid snapshot may remain visible for at most
-30 seconds with target state `target_reloading`; calls fail with a retryable error.
-After that grace period, the gateway removes target tools except the cached
-`unity-status` contract; calls report target unavailability until Unity
-reconnects and a full registry fetch succeeds.
-
-## Execution and concurrency
-
-The bridge parses and authenticates requests off the Unity main thread, then
-queues Unity API work to the main thread when `mainThread` is true. Each tool has
-a bounded timeout. Synchronous methods, `Task<T>`, structured results, and job
-handles share the same result envelope. Long-running operations return a `jobId`
-and are observed through job endpoints. Each job declares whether it is cancellable;
-unsupported or terminal cancellation requests return a conflict without changing the
-reported state. `compile-request` persists its job identity across the domain reload caused
-by compilation and resumes polling the same `jobId` rather than returning an unknown job.
-
-Mutation tools default to preview. A request changes state only when its schema
-supports dry-run and `apply` is explicitly true. Editor scene mutations form a
-Unity Undo group. Asset operations return a change journal; callers must not
-assume transactional rollback for changes Unity cannot reverse safely.
-
-## Distribution boundaries
-
-- Python: `unity-mcp-server`, Python 3.11+, MCP Python SDK 2.x.
-- Unity: UPM package `com.ducminh.unity-mcp`, Unity 6 (`6000.0+`).
-- Runtime bridge: desktop Development Builds only, with a profile baked before
-  build. Mono and IL2CPP are supported through a generated tool manifest and
-  preservation metadata.
-- Excluded from v1: production Player builds, mobile, WebGL, consoles, remote or
-  cloud gateways, project Python plug-ins, and telemetry.
+`docs/tool-catalog.json` is the repository CI contract for the 47 extension
+commands across 19 groups. `tools/validate_catalog.py` scans every C# file in
+`Packages/com.ducminh.unity-mcp` (excluding `Samples~` and `Tests`), verifies
+exact 1:1 parity with `docs/tool-catalog.json` (`(group, name)` and `Effect`),
+checks for duplicate commands or reserved `[CliArg]` flag names, and asserts zero
+group collisions with `com.unity.pipeline`'s 23 built-in groups.

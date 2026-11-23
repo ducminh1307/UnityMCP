@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using DucMinh.UnityMcp.Editor;
 using NUnit.Framework;
 
 namespace DucMinh.UnityMcp.Tests
@@ -7,73 +8,96 @@ namespace DucMinh.UnityMcp.Tests
     public sealed class UnityMcpCodexProjectConfigTests
     {
         [Test]
-        public void Merge_AppendsManagedServer_AndPreservesOtherSettings()
+        public void Merge_AppendsManagedStdioServer_AndPreservesOtherSettings()
         {
             const string existing = "model = \"gpt-test\"\n\n[mcp_servers.docs]\nurl = \"https://example.test/mcp\"\n";
+            var projectRoot = Path.Combine(Path.GetTempPath(), "unity-mcp-codex-merge-" + Guid.NewGuid().ToString("N"));
+            var normalizedRoot = UnityMcpProjectConfigFile.NormalizeProjectRoot(projectRoot);
 
-            var result = DucMinh.UnityMcp.Editor.UnityMcpCodexProjectConfig.Merge(
+            var result = UnityMcpCodexProjectConfig.Merge(
                 existing,
-                "unity_sample_123456",
-                "http://127.0.0.1:8988/mcp",
-                "secret-token");
+                projectRoot,
+                "unity",
+                "unity");
 
             StringAssert.Contains("model = \"gpt-test\"", result);
             StringAssert.Contains("[mcp_servers.docs]", result);
-            StringAssert.Contains("# UnityMCP managed project server: unity_sample_123456", result);
-            StringAssert.Contains("[mcp_servers.unity_sample_123456]", result);
-            StringAssert.Contains("url = \"http://127.0.0.1:8988/mcp\"", result);
-            StringAssert.Contains("Authorization = \"Bearer secret-token\"", result);
+            StringAssert.Contains("# UnityMCP managed project server: unity", result);
+            StringAssert.Contains("[mcp_servers.unity]", result);
+            StringAssert.Contains("command = \"unity\"", result);
+            StringAssert.Contains(
+                "args = [\"mcp\", \"--tool-groups\", \"--project-path\", \"" + EscapeToml(normalizedRoot) + "\"]",
+                result);
+            StringAssert.DoesNotContain("Bearer", result);
+            StringAssert.DoesNotContain("http://", result);
         }
 
         [Test]
-        public void Merge_UpdatesOnlyManagedValues_WithoutDuplicatingServer()
+        public void Merge_ReplacesLegacyHttpFieldsWithStdio_WithoutDuplicatingServer()
         {
-            const string existing = "# UnityMCP managed project server: unity_sample_123456\n"
-                + "[mcp_servers.unity_sample_123456]\n"
+            const string existing = "# UnityMCP managed project server: unity_sample\n"
+                + "[mcp_servers.unity_sample]\n"
                 + "url = \"http://127.0.0.1:8765/mcp\"\n"
                 + "enabled = true\n"
-                + "http_headers = { Authorization = \"Bearer old-token\" }\n\n"
+                + "http_headers = { Authorization = \"Bearer old-token\" }\n"
+                + "args = [\n"
+                + "  \"old-arg\"\n"
+                + "]\n\n"
                 + "[history]\npersistence = \"save-all\"\n";
+            var projectRoot = Path.Combine(Path.GetTempPath(), "unity-mcp-codex-replace-" + Guid.NewGuid().ToString("N"));
+            var normalizedRoot = UnityMcpProjectConfigFile.NormalizeProjectRoot(projectRoot);
 
-            var result = DucMinh.UnityMcp.Editor.UnityMcpCodexProjectConfig.Merge(
+            var result = UnityMcpCodexProjectConfig.Merge(
                 existing,
-                "unity_sample_123456",
-                "http://127.0.0.1:8988/mcp",
-                "new-token");
+                projectRoot,
+                "unity_sample",
+                @"C:\Program Files\Unity\unity.exe");
 
-            Assert.That(Count(result, "[mcp_servers.unity_sample_123456]"), Is.EqualTo(1));
-            Assert.That(Count(result, "url = "), Is.EqualTo(1));
-            Assert.That(Count(result, "http_headers = "), Is.EqualTo(1));
+            Assert.That(Count(result, "[mcp_servers.unity_sample]"), Is.EqualTo(1));
+            Assert.That(Count(result, "command = "), Is.EqualTo(1));
+            Assert.That(Count(result, "args = "), Is.EqualTo(1));
             StringAssert.Contains("enabled = true", result);
             StringAssert.Contains("[history]", result);
+            StringAssert.Contains("command = \"C:\\\\Program Files\\\\Unity\\\\unity.exe\"", result);
+            StringAssert.Contains(EscapeToml(normalizedRoot), result);
+            StringAssert.DoesNotContain("url =", result);
+            StringAssert.DoesNotContain("http_headers", result);
             StringAssert.DoesNotContain("old-token", result);
+            StringAssert.DoesNotContain("old-arg", result);
         }
 
         [Test]
-        public void TryWrite_CreatesProjectConfig_AndLocalGitExclude()
+        public void TryWrite_CreatesProjectConfig_WithoutSecretsOrGitExcludeWrites()
         {
             var projectRoot = Path.Combine(Path.GetTempPath(), "unity-mcp-codex-config-" + Guid.NewGuid().ToString("N"));
             try
             {
-                Directory.CreateDirectory(Path.Combine(projectRoot, ".git", "info"));
+                var excludePath = Path.Combine(projectRoot, ".git", "info", "exclude");
+                Directory.CreateDirectory(Path.GetDirectoryName(excludePath));
+                File.WriteAllText(excludePath, "# existing git exclude\n");
 
-                var success = DucMinh.UnityMcp.Editor.UnityMcpCodexProjectConfig.TryWrite(
+                var success = UnityMcpCodexProjectConfig.TryWrite(
                     projectRoot,
-                    "unity_sample_123456",
-                    "http://127.0.0.1:8988/mcp",
-                    "secret-token",
+                    "unity",
+                    "unity",
                     out var configPath,
                     out var error);
 
                 Assert.That(success, Is.True, error);
-                Assert.That(configPath, Is.EqualTo(Path.Combine(projectRoot, ".codex", "config.toml")));
-                StringAssert.Contains("[mcp_servers.unity_sample_123456]", File.ReadAllText(configPath));
-                StringAssert.Contains("/.codex/config.toml", File.ReadAllText(Path.Combine(projectRoot, ".git", "info", "exclude")));
-                Assert.That(DucMinh.UnityMcp.Editor.UnityMcpCodexProjectConfig.IsManaged(projectRoot, "unity_sample_123456"), Is.True);
+                Assert.That(configPath, Is.EqualTo(Path.Combine(Path.GetFullPath(projectRoot), ".codex", "config.toml")));
+                var content = File.ReadAllText(configPath);
+                StringAssert.Contains("[mcp_servers.unity]", content);
+                StringAssert.Contains("command = \"unity\"", content);
+                StringAssert.Contains("\"mcp\", \"--tool-groups\", \"--project-path\"", content);
+                StringAssert.DoesNotContain("Bearer", content);
+                StringAssert.DoesNotContain("http://", content);
+                Assert.That(File.ReadAllText(excludePath), Is.EqualTo("# existing git exclude\n"));
+                Assert.That(UnityMcpCodexProjectConfig.IsManaged(projectRoot, "unity"), Is.True);
             }
             finally
             {
-                if (Directory.Exists(projectRoot)) Directory.Delete(projectRoot, true);
+                if (Directory.Exists(projectRoot))
+                    Directory.Delete(projectRoot, true);
             }
         }
 
@@ -83,45 +107,63 @@ namespace DucMinh.UnityMcp.Tests
             var projectRoot = Path.Combine(Path.GetTempPath(), "unity-mcp-codex-update-" + Guid.NewGuid().ToString("N"));
             try
             {
-                Assert.That(DucMinh.UnityMcp.Editor.UnityMcpCodexProjectConfig.TryWrite(
+                Assert.That(UnityMcpCodexProjectConfig.TryWrite(
                     projectRoot,
-                    "unity_sample_123456",
-                    "http://127.0.0.1:8765/mcp",
-                    "old-token",
+                    "unity",
+                    "old-unity",
                     out _,
                     out var firstError), Is.True, firstError);
 
-                Assert.That(DucMinh.UnityMcp.Editor.UnityMcpCodexProjectConfig.TryWrite(
+                Assert.That(UnityMcpCodexProjectConfig.TryWrite(
                     projectRoot,
-                    "unity_sample_123456",
-                    "http://127.0.0.1:8988/mcp",
-                    "new-token",
+                    "unity",
+                    "new-unity",
                     out var configPath,
                     out var secondError), Is.True, secondError);
 
                 var result = File.ReadAllText(configPath);
-                Assert.That(Count(result, "[mcp_servers.unity_sample_123456]"), Is.EqualTo(1));
-                StringAssert.Contains("http://127.0.0.1:8988/mcp", result);
-                StringAssert.Contains("new-token", result);
-                StringAssert.DoesNotContain("old-token", result);
+                Assert.That(Count(result, "[mcp_servers.unity]"), Is.EqualTo(1));
+                StringAssert.Contains("command = \"new-unity\"", result);
+                StringAssert.DoesNotContain("old-unity", result);
             }
             finally
             {
-                if (Directory.Exists(projectRoot)) Directory.Delete(projectRoot, true);
+                if (Directory.Exists(projectRoot))
+                    Directory.Delete(projectRoot, true);
             }
         }
 
         [Test]
-        public void Merge_RejectsDuplicateTargetTables()
+        public void Merge_RejectsDuplicateTargetTables_AndInvalidServerNames()
         {
-            const string existing = "[mcp_servers.unity_sample]\nurl = \"one\"\n\n[mcp_servers.unity_sample]\nurl = \"two\"\n";
+            const string existing = "[mcp_servers.unity]\ncommand = \"one\"\n\n[mcp_servers.unity]\ncommand = \"two\"\n";
+            var projectRoot = Path.Combine(Path.GetTempPath(), "unity-mcp-codex-dup-" + Guid.NewGuid().ToString("N"));
 
-            Assert.Throws<InvalidDataException>(() => DucMinh.UnityMcp.Editor.UnityMcpCodexProjectConfig.Merge(
+            Assert.Throws<InvalidDataException>(() => UnityMcpCodexProjectConfig.Merge(
                 existing,
-                "unity_sample",
-                "http://127.0.0.1:8988/mcp",
-                "secret-token"));
+                projectRoot,
+                "unity",
+                "unity"));
+
+            Assert.Throws<ArgumentException>(() => UnityMcpCodexProjectConfig.Merge(
+                string.Empty,
+                projectRoot,
+                "invalid server!",
+                "unity"));
         }
+
+        [Test]
+        public void EnsureSafeProjectPath_RejectsOutsideRoot()
+        {
+            var projectRoot = Path.Combine(Path.GetTempPath(), "unity-mcp-codex-safe-" + Guid.NewGuid().ToString("N"));
+            var outsidePath = Path.GetFullPath(Path.Combine(projectRoot, "..", "outside.toml"));
+
+            Assert.Throws<InvalidOperationException>(() =>
+                UnityMcpProjectConfigFile.EnsureSafeProjectPath(projectRoot, outsidePath));
+        }
+
+        private static string EscapeToml(string value) =>
+            value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
         private static int Count(string value, string needle)
         {

@@ -1,3 +1,4 @@
+#if DM_LOCALIZATION_PRESENT
 #pragma warning disable UAC0005 // Editor tool reflection scans currently loaded Localization types.
 using System;
 using System.Collections;
@@ -8,14 +9,18 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using Newtonsoft.Json.Linq;
+using Unity.Pipeline.Commands;
+using Unity.Pipeline.Editor.Authoring;
 using UnityEditor;
 using UnityEngine;
 
 namespace DucMinh.UnityMcp.Editor
 {
-    [Serializable] public sealed class LocalizationTableListInput { public int maxCollections = 256; }
     [Serializable] public sealed class LocalizationLocaleInfo { public string code; public string name; public string assetPath; }
-    [Serializable] public sealed class LocalizationTableCollectionInfo
+
+    [Serializable]
+    public sealed class LocalizationTableCollectionInfo
     {
         public string name;
         public string assetPath;
@@ -24,23 +29,18 @@ namespace DucMinh.UnityMcp.Editor
         public int totalEntries;
     }
 
-    [Serializable] public sealed class LocalizationTableListOutput
+    [Serializable]
+    public sealed class LocalizationTableListOutput
     {
         public List<LocalizationLocaleInfo> projectLocales = new List<LocalizationLocaleInfo>();
         public List<LocalizationTableCollectionInfo> collections = new List<LocalizationTableCollectionInfo>();
         public bool truncated;
     }
 
-    [Serializable] public sealed class LocalizationEntryGetInput
-    {
-        public string collection;
-        public string key;
-        /// <summary>Optional exact locale codes. Empty selects every table in the collection.</summary>
-        public List<string> locales = new List<string>();
-    }
-
     [Serializable] public sealed class LocalizationMetadataInfo { public string type; public string summary; }
-    [Serializable] public sealed class LocalizationEntryValueInfo
+
+    [Serializable]
+    public sealed class LocalizationEntryValueInfo
     {
         public string locale;
         public bool exists;
@@ -48,7 +48,8 @@ namespace DucMinh.UnityMcp.Editor
         public List<LocalizationMetadataInfo> metadata = new List<LocalizationMetadataInfo>();
     }
 
-    [Serializable] public sealed class LocalizationEntryGetOutput
+    [Serializable]
+    public sealed class LocalizationEntryGetOutput
     {
         public string collection;
         public string key;
@@ -57,17 +58,9 @@ namespace DucMinh.UnityMcp.Editor
     }
 
     [Serializable] public sealed class LocalizationEntrySetValue { public string locale; public string value; }
-    [Serializable] public sealed class LocalizationEntrySetInput
-    {
-        public string collection;
-        public string key;
-        /// <summary>Revision returned by localization-entry-get for the same key and locales.</summary>
-        public string expectedRevision;
-        public List<LocalizationEntrySetValue> values = new List<LocalizationEntrySetValue>();
-        public bool apply;
-    }
 
-    [Serializable] public sealed class LocalizationEntrySetOutput
+    [Serializable]
+    public sealed class LocalizationEntrySetOutput
     {
         public bool dryRun;
         public bool changed;
@@ -80,12 +73,12 @@ namespace DucMinh.UnityMcp.Editor
     }
 
     /// <summary>
-    /// Optional Unity Localization integration. The code intentionally uses only reflection so
-    /// com.unity.localization remains optional; RequiredType keeps these tools out of tools/list
-    /// on projects where the package is not installed.
+    /// Optional Unity Localization integration. Uses reflection inside DM_LOCALIZATION_PRESENT
+    /// so com.unity.localization requires no extra assembly reference in DucMinh.UnityMcp.Editor.asmdef.
     /// </summary>
     public static class EditorLocalizationTools
     {
+        private const string Group = "localization";
         private const int MaxCollections = 512;
         private const int MaxLocales = 128;
         private const int MaxKeyLength = 256;
@@ -94,10 +87,54 @@ namespace DucMinh.UnityMcp.Editor
         private const int MaxMetadataSummaryLength = 1024;
         private static readonly Regex LocaleCode = new Regex("^[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8})*$", RegexOptions.Compiled);
 
-        [UnityMcpTool("localization-table-list", Description = "List String Table collections and configured Localization locales.", Category = "project-extensions", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead, RequiredType = "UnityEditor.Localization.LocalizationEditorSettings")]
-        public static LocalizationTableListOutput LocalizationTableList(LocalizationTableListInput input)
+        [CliGroupCommand(
+            Group,
+            "List String Table collections and configured Localization locales.",
+            Name = "list_tables",
+            Effect = CommandEffect.ReadOnly,
+            Tags = new[] { "localization" })]
+        internal static ExitCode ListTables(
+            CommandContext cmd,
+            [CliArg("max-collections", "Maximum number of String Table collections to return (1-512).")] int maxCollections = 256)
         {
-            var limit = Math.Max(1, Math.Min(input?.maxCollections ?? 256, MaxCollections));
+            return Execute(cmd, () => ListTablesCore(maxCollections));
+        }
+
+        [CliGroupCommand(
+            Group,
+            "Read localized String Table values and entry metadata for an existing key.",
+            Name = "get_entry",
+            Effect = CommandEffect.ReadOnly,
+            Tags = new[] { "localization" })]
+        internal static ExitCode GetEntry(
+            CommandContext cmd,
+            [CliArg("collection", "Exact String Table collection name.", Required = true)] string collection,
+            [CliArg("key", "Exact localization entry key.", Required = true)] string key,
+            [CliArg("locales", "Optional comma-separated locale codes or JSON array string. Omit to read every locale.")] string locales = null)
+        {
+            return Execute(cmd, () => GetEntryCore(collection, key, ParseLocales(locales)));
+        }
+
+        [CliGroupCommand(
+            Group,
+            "Update existing String Table values across explicit locales with optimistic revision checking.",
+            Name = "set_entry",
+            Effect = CommandEffect.Idempotent,
+            Tags = new[] { "localization" })]
+        internal static ExitCode SetEntry(
+            CommandContext cmd,
+            [CliArg("collection", "Exact String Table collection name.", Required = true)] string collection,
+            [CliArg("key", "Exact localization entry key.", Required = true)] string key,
+            [CliArg("expected-revision", "64-character revision hash returned by localization get_entry.", Required = true)] string expectedRevision,
+            [CliArg("values-json", "JSON array of {locale, value} objects to update.", Required = true)] string valuesJson,
+            [CliArg("dry-run", "If true, validate revision and values without modifying String Tables.")] bool dryRun = false)
+        {
+            return Execute(cmd, () => SetEntryCore(collection, key, expectedRevision, ParseUpdatesJson(valuesJson), dryRun));
+        }
+
+        internal static LocalizationTableListOutput ListTablesCore(int maxCollections = 256)
+        {
+            var limit = Math.Max(1, Math.Min(maxCollections, MaxCollections));
             var output = new LocalizationTableListOutput();
             foreach (var locale in GetProjectLocales()) output.projectLocales.Add(ToLocaleInfo(locale));
             foreach (var collection in GetStringTableCollections().OrderBy(CollectionName, StringComparer.Ordinal))
@@ -114,48 +151,53 @@ namespace DucMinh.UnityMcp.Editor
                     info.locales.Add(new LocalizationLocaleInfo { code = LocaleCodeOf(table), name = LocaleCodeOf(table), assetPath = AssetPath(table) });
                     info.totalEntries = checked(info.totalEntries + Count(ReadOptionalMember(table, "Values")));
                 }
+
                 output.collections.Add(info);
             }
+
             return output;
         }
 
-        [UnityMcpTool("localization-entry-get", Description = "Read localized String Table values and entry metadata for an existing key.", Category = "project-extensions", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.SafeRead, RequiredType = "UnityEditor.Localization.LocalizationEditorSettings")]
-        public static LocalizationEntryGetOutput LocalizationEntryGet(LocalizationEntryGetInput input)
+        internal static LocalizationEntryGetOutput GetEntryCore(string collection, string key, List<string> locales = null)
         {
-            if (input == null) throw new ArgumentNullException(nameof(input));
-            ValidateCollectionName(input.collection);
-            ValidateKey(input.key);
-            var collection = RequireCollection(input.collection);
-            var tables = ResolveTables(collection, input.locales);
-            var values = ReadValues(tables, input.key);
-            if (!values.Any(value => value.exists)) throw new ArgumentException("The String Table collection does not contain key '" + input.key + "'.");
+            ValidateCollectionName(collection);
+            ValidateKey(key);
+            var resolvedCollection = RequireCollection(collection);
+            var tables = ResolveTables(resolvedCollection, locales);
+            var values = ReadValues(tables, key);
+            if (!values.Any(value => value.exists))
+                throw new ArgumentException("The String Table collection does not contain key '" + key + "'.");
             return new LocalizationEntryGetOutput
             {
-                collection = CollectionName(collection),
-                key = input.key,
-                revision = Revision(CollectionName(collection), input.key, values),
+                collection = CollectionName(resolvedCollection),
+                key = key,
+                revision = Revision(CollectionName(resolvedCollection), key, values),
                 values = values
             };
         }
 
-        [UnityMcpTool("localization-entry-set", Description = "Update existing String Table values across explicit locales with optimistic revision checking; dry-run unless apply is true.", Category = "project-extensions", Scope = UnityMcpScope.Editor, Safety = UnityMcpSafety.Write, SupportsDryRun = true, RequiredType = "UnityEditor.Localization.LocalizationEditorSettings")]
-        public static LocalizationEntrySetOutput LocalizationEntrySet(LocalizationEntrySetInput input, UnityMcpContext context)
+        internal static LocalizationEntrySetOutput SetEntryCore(
+            string collection,
+            string key,
+            string expectedRevision,
+            List<LocalizationEntrySetValue> values,
+            bool dryRun = false)
         {
-            if (input == null) throw new ArgumentNullException(nameof(input));
-            if (context == null) throw new ArgumentNullException(nameof(context));
-            ValidateCollectionName(input.collection);
-            ValidateKey(input.key);
-            if (string.IsNullOrWhiteSpace(input.expectedRevision) || input.expectedRevision.Length != 64 || input.expectedRevision.Any(value => !Uri.IsHexDigit(value)))
-                throw new ArgumentException("expectedRevision must be the 64-character revision returned by localization-entry-get.");
-            var updates = ValidateUpdates(input.values);
-            var collection = RequireCollection(input.collection);
-            var tables = ResolveTables(collection, updates.Select(value => value.locale).ToList());
-            var before = ReadValues(tables, input.key);
+            ValidateCollectionName(collection);
+            ValidateKey(key);
+            if (string.IsNullOrWhiteSpace(expectedRevision) || expectedRevision.Length != 64 || expectedRevision.Any(value => !Uri.IsHexDigit(value)))
+                throw new ArgumentException("expected-revision must be the 64-character revision returned by localization get_entry.");
+
+            var updates = ValidateUpdates(values);
+            var resolvedCollection = RequireCollection(collection);
+            var tables = ResolveTables(resolvedCollection, updates.Select(value => value.locale).ToList());
+            var before = ReadValues(tables, key);
             if (before.Any(value => !value.exists))
                 throw new InvalidOperationException("All requested locale tables must already contain the key. Create missing translations in Unity's Localization Tables window before using this bounded update tool.");
-            var revisionBefore = Revision(CollectionName(collection), input.key, before);
-            if (!string.Equals(revisionBefore, input.expectedRevision, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("The requested localization entry is stale. Call localization-entry-get again before applying changes.");
+
+            var revisionBefore = Revision(CollectionName(resolvedCollection), key, before);
+            if (!string.Equals(revisionBefore, expectedRevision, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The requested localization entry is stale. Call localization get_entry again before applying changes.");
 
             var planned = before.Select(value => new LocalizationEntryValueInfo
             {
@@ -164,47 +206,141 @@ namespace DucMinh.UnityMcp.Editor
                 value = updates.Single(update => string.Equals(update.locale, value.locale, StringComparison.Ordinal)).value,
                 metadata = value.metadata
             }).ToList();
+
             var output = new LocalizationEntrySetOutput
             {
-                dryRun = context.DryRun,
-                changed = !context.DryRun && before.Any(value => !string.Equals(value.value, planned.Single(next => next.locale == value.locale).value, StringComparison.Ordinal)),
-                collection = CollectionName(collection),
-                key = input.key,
+                dryRun = dryRun,
+                changed = !dryRun && before.Any(value => !string.Equals(value.value, planned.Single(next => next.locale == value.locale).value, StringComparison.Ordinal)),
+                collection = CollectionName(resolvedCollection),
+                key = key,
                 revisionBefore = revisionBefore,
-                revisionAfter = Revision(CollectionName(collection), input.key, planned),
-                rollbackSupported = !context.DryRun,
+                revisionAfter = Revision(CollectionName(resolvedCollection), key, planned),
+                rollbackSupported = !dryRun,
                 journal = updates.Select(update => new ChangeJournalEntry
                 {
                     operation = "set-localized-string",
-                    before = input.collection + "#" + input.key + "@" + update.locale,
-                    after = input.collection + "#" + input.key + "@" + update.locale
+                    before = collection + "#" + key + "@" + update.locale,
+                    after = collection + "#" + key + "@" + update.locale
                 }).ToList()
             };
-            if (context.DryRun || !output.changed) return output;
+            if (dryRun || !output.changed) return output;
 
             var tableEntries = new List<KeyValuePair<object, object>>();
-            for (var index = 0; index < tables.Count; index++) tableEntries.Add(new KeyValuePair<object, object>(tables[index], FindEntry(tables[index], input.key)));
-            var sharedData = ReadOptionalMember(collection, "SharedData") as UnityEngine.Object;
+            for (var index = 0; index < tables.Count; index++)
+                tableEntries.Add(new KeyValuePair<object, object>(tables[index], FindEntry(tables[index], key)));
+
+            var sharedData = ReadOptionalMember(resolvedCollection, "SharedData") as UnityEngine.Object;
             var undoTargets = tableEntries.Select(value => value.Key as UnityEngine.Object).Where(value => value != null).ToList();
             if (sharedData != null) undoTargets.Add(sharedData);
-            Undo.RecordObjects(undoTargets.Distinct().ToArray(), "UnityMCP Set Localized String");
+
+            using (new AuthoringUndoScope("UnityMCP Set Localized String"))
+            {
+                Undo.RecordObjects(undoTargets.Distinct().ToArray(), "UnityMCP Set Localized String");
+                try
+                {
+                    foreach (var pair in tableEntries)
+                    {
+                        var locale = LocaleCodeOf(pair.Key);
+                        var update = updates.Single(value => string.Equals(value.locale, locale, StringComparison.Ordinal));
+                        SetRequiredStringMember(pair.Value, "Value", update.value);
+                        EditorUtility.SetDirty((UnityEngine.Object)pair.Key);
+                    }
+
+                    if (sharedData != null) EditorUtility.SetDirty(sharedData);
+                    foreach (var table in tables) AssetDatabase.SaveAssetIfDirty((UnityEngine.Object)table);
+                    if (sharedData != null) AssetDatabase.SaveAssetIfDirty(sharedData);
+                    return output;
+                }
+                catch (TargetInvocationException exception)
+                {
+                    throw new InvalidOperationException("Unity Localization rejected the value update: " + (exception.InnerException?.Message ?? exception.Message), exception.InnerException ?? exception);
+                }
+            }
+        }
+
+        internal static List<string> ParseLocales(string locales)
+        {
+            if (string.IsNullOrWhiteSpace(locales))
+                return new List<string>();
+
+            var trimmed = locales.Trim();
+            if (trimmed.StartsWith("[", StringComparison.Ordinal))
+            {
+                JArray array;
+                try { array = JArray.Parse(trimmed); }
+                catch (Exception ex) { throw new ArgumentException("locales must be a comma-separated list or valid JSON array of locale codes: " + ex.Message, ex); }
+
+                var parsed = new List<string>(array.Count);
+                foreach (var item in array)
+                {
+                    if (item.Type != JTokenType.String)
+                        throw new ArgumentException("locales JSON array entries must be strings.");
+                    parsed.Add(item.Value<string>());
+                }
+
+                return parsed;
+            }
+
+            return trimmed.Split(',').Select(part => part.Trim()).ToList();
+        }
+
+        internal static List<LocalizationEntrySetValue> ParseUpdatesJson(string valuesJson)
+        {
+            if (string.IsNullOrWhiteSpace(valuesJson))
+                throw new ArgumentException("values-json is required.");
+
+            JArray array;
             try
             {
-                foreach (var pair in tableEntries)
-                {
-                    var locale = LocaleCodeOf(pair.Key);
-                    var update = updates.Single(value => string.Equals(value.locale, locale, StringComparison.Ordinal));
-                    SetRequiredStringMember(pair.Value, "Value", update.value);
-                    EditorUtility.SetDirty((UnityEngine.Object)pair.Key);
-                }
-                if (sharedData != null) EditorUtility.SetDirty(sharedData);
-                foreach (var table in tables) AssetDatabase.SaveAssetIfDirty((UnityEngine.Object)table);
-                if (sharedData != null) AssetDatabase.SaveAssetIfDirty(sharedData);
-                return output;
+                if (!(JToken.Parse(valuesJson) is JArray parsed))
+                    throw new ArgumentException("values-json must be a JSON array of {locale, value} objects.");
+                array = parsed;
             }
-            catch (TargetInvocationException exception)
+            catch (ArgumentException) { throw; }
+            catch (Exception ex)
             {
-                throw new InvalidOperationException("Unity Localization rejected the value update: " + (exception.InnerException?.Message ?? exception.Message), exception.InnerException ?? exception);
+                throw new ArgumentException("values-json is not valid JSON: " + ex.Message, ex);
+            }
+
+            var updates = new List<LocalizationEntrySetValue>(array.Count);
+            foreach (var item in array)
+            {
+                if (!(item is JObject obj))
+                    throw new ArgumentException("values-json entries must be JSON objects with 'locale' and 'value'.");
+                var localeToken = obj["locale"];
+                var valueToken = obj["value"];
+                updates.Add(new LocalizationEntrySetValue
+                {
+                    locale = localeToken == null || localeToken.Type == JTokenType.Null ? null : localeToken.Value<string>(),
+                    value = valueToken == null || valueToken.Type == JTokenType.Null ? null : valueToken.Value<string>()
+                });
+            }
+
+            return updates;
+        }
+
+        private static ExitCode Execute(CommandContext cmd, Func<object> action)
+        {
+            try
+            {
+                cmd.Result.Write(action());
+                return ExitCode.Success;
+            }
+            catch (TargetInvocationException ex)
+            {
+                var inner = ex.InnerException ?? ex;
+                cmd.Log.Error(inner.Message);
+                return inner is ArgumentException ? ExitCode.InvalidUsage : ExitCode.Failed;
+            }
+            catch (ArgumentException ex)
+            {
+                cmd.Log.Error(ex.Message);
+                return ExitCode.InvalidUsage;
+            }
+            catch (Exception ex)
+            {
+                cmd.Log.Error(ex.Message);
+                return ExitCode.Failed;
             }
         }
 
@@ -242,6 +378,7 @@ namespace DucMinh.UnityMcp.Editor
                 var locale = LocaleCodeOf(table);
                 if (!duplicates.Add(locale)) throw new InvalidOperationException("The collection contains duplicate LocaleIdentifier '" + locale + "'.");
             }
+
             return tables;
         }
 
@@ -258,6 +395,7 @@ namespace DucMinh.UnityMcp.Editor
                     throw new ArgumentException("The String Table collection does not contain locale '" + locale + "'.");
                 result.Add(table);
             }
+
             return result;
         }
 
@@ -274,6 +412,7 @@ namespace DucMinh.UnityMcp.Editor
                 if (!seen.Add(locale)) throw new ArgumentException("Each locale may appear only once.");
                 result.Add(locale);
             }
+
             return result;
         }
 
@@ -293,6 +432,7 @@ namespace DucMinh.UnityMcp.Editor
                     throw new ArgumentException("Localized values must be non-null, contain no NUL characters, and be no longer than " + MaxValueLength + " characters.");
                 result.Add(new LocalizationEntrySetValue { locale = locale, value = update.value });
             }
+
             return result;
         }
 
@@ -330,6 +470,7 @@ namespace DucMinh.UnityMcp.Editor
                 if (summary.Length > MaxMetadataSummaryLength) summary = summary.Substring(0, MaxMetadataSummaryLength) + "...";
                 result.Add(new LocalizationMetadataInfo { type = metadata.GetType().FullName, summary = summary });
             }
+
             return result;
         }
 
@@ -376,23 +517,14 @@ namespace DucMinh.UnityMcp.Editor
                 var text = value.value ?? string.Empty;
                 builder.Append(text.Length).Append(':').Append(text).Append('|');
             }
+
             using (var sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(new UTF8Encoding(false).GetBytes(builder.ToString()))).Replace("-", string.Empty).ToLowerInvariant();
         }
 
         private static Type RequireType(string fullName)
         {
-            var type = Type.GetType(fullName, false);
-            if (type != null) return type;
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                try
-                {
-                    type = assembly.GetType(fullName, false);
-                    if (type != null) return type;
-                }
-                catch { }
-            }
-            throw new InvalidOperationException("The required Unity Localization type is unavailable: " + fullName);
+            return EditorCommandHelpers.TryResolveOptionalType(fullName)
+                ?? throw new InvalidOperationException("The required Unity Localization type is unavailable: " + fullName);
         }
 
         private static object ReadRequiredMember(object target, string name)
@@ -447,3 +579,4 @@ namespace DucMinh.UnityMcp.Editor
         }
     }
 }
+#endif

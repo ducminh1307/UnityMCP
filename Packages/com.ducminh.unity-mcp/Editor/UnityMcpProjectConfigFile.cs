@@ -1,69 +1,81 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Text;
 
 namespace DucMinh.UnityMcp.Editor
 {
     /// <summary>
-    /// Shared file-system safeguards for project-scoped client configurations that contain
-    /// UnityMCP's local bearer token.
+    /// Shared file-system safeguards and atomic writes for project-scoped client configurations.
     /// </summary>
     internal static class UnityMcpProjectConfigFile
     {
-        internal static void PrepareLocalSecretFile(string projectRoot, string configPath, string clientName)
+        private static StringComparison PathComparison =>
+            Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+        internal static string NormalizeProjectRoot(string projectRoot)
         {
-            if (!TryFindGitDirectory(projectRoot, out var repositoryRoot, out var gitDirectory)) return;
+            if (string.IsNullOrWhiteSpace(projectRoot))
+                throw new ArgumentException("The Unity project root is required.", nameof(projectRoot));
 
-            if (File.Exists(configPath) && IsTrackedByGit(repositoryRoot, configPath))
-                throw new InvalidOperationException(
-                    configPath.Substring(repositoryRoot.Length)
-                        .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                        .Replace('\\', '/')
-                    + " is already tracked by Git. Untrack it before writing the " + clientName + " bearer token.");
+            var full = Path.GetFullPath(projectRoot);
+            var root = Path.GetPathRoot(full);
+            if (!string.Equals(full, root, PathComparison))
+                full = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return full;
+        }
 
-            var commonGitDirectory = ResolveGitCommonDirectory(gitDirectory);
-            var infoDirectory = Path.Combine(commonGitDirectory, "info");
-            var excludePath = Path.Combine(infoDirectory, "exclude");
-            Directory.CreateDirectory(infoDirectory);
+        internal static void EnsureSafeProjectPath(string projectRoot, string targetPath)
+        {
+            var fullRoot = NormalizeProjectRoot(projectRoot);
+            if (string.IsNullOrWhiteSpace(targetPath))
+                throw new ArgumentException("The target file path is required.", nameof(targetPath));
 
-            var relativePath = configPath.Substring(repositoryRoot.Length)
-                .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Replace('\\', '/');
-            var entry = "/" + relativePath;
-            var directoryEntry = relativePath.Contains("/")
-                ? "/" + relativePath.Substring(0, relativePath.LastIndexOf('/') + 1)
-                : null;
-            var existing = File.Exists(excludePath) ? File.ReadAllText(excludePath) : string.Empty;
+            var fullTarget = Path.GetFullPath(targetPath);
+            var rootPrefix = fullRoot.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+                ? fullRoot
+                : fullRoot + Path.DirectorySeparatorChar;
 
-            foreach (var line in existing.Replace("\r\n", "\n").Split('\n'))
+            if (!fullTarget.StartsWith(rootPrefix, PathComparison))
+                throw new InvalidOperationException("Refusing to write outside the Unity project root: " + fullTarget);
+
+            if (File.Exists(fullTarget) && IsReparsePoint(fullTarget))
+                throw new InvalidOperationException("Refusing to write through a symbolic link inside the project: " + fullTarget);
+
+            var cursor = Path.GetDirectoryName(fullTarget);
+            while (!string.IsNullOrEmpty(cursor)
+                && !string.Equals(cursor, fullRoot, PathComparison)
+                && cursor.StartsWith(rootPrefix, PathComparison))
             {
-                var value = line.Trim().Replace('\\', '/');
-                if (value.StartsWith("#", StringComparison.Ordinal)) continue;
-                if (string.Equals(value, entry, StringComparison.Ordinal)
-                    || string.Equals(value, entry.TrimStart('/'), StringComparison.Ordinal)
-                    || directoryEntry != null && (string.Equals(value, directoryEntry, StringComparison.Ordinal)
-                        || string.Equals(value, directoryEntry.TrimStart('/'), StringComparison.Ordinal))) return;
-            }
+                if (Directory.Exists(cursor) && IsReparsePoint(cursor))
+                    throw new InvalidOperationException("Refusing to traverse a symbolic link directory inside the project: " + cursor);
 
-            var newline = existing.Contains("\r\n") ? "\r\n" : Environment.NewLine;
-            var builder = new StringBuilder(existing);
-            if (builder.Length > 0 && !existing.EndsWith("\n", StringComparison.Ordinal)) builder.Append(newline);
-            builder.Append("# Local bearer-authenticated ").Append(clientName).Append(" config generated by UnityMCP").Append(newline);
-            builder.Append(entry).Append(newline);
-            WriteAtomically(excludePath, builder.ToString());
+                var parent = Path.GetDirectoryName(cursor);
+                if (string.Equals(parent, cursor, PathComparison)) break;
+                cursor = parent;
+            }
         }
 
         internal static void WriteAtomically(string path, string content)
         {
-            var directory = Path.GetDirectoryName(path) ?? throw new InvalidOperationException("The target file has no parent directory.");
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("The target file path is required.", nameof(path));
+
+            var fullPath = Path.GetFullPath(path);
+            if (File.Exists(fullPath) && IsReparsePoint(fullPath))
+                throw new InvalidOperationException("Refusing to replace a symbolic link target: " + fullPath);
+
+            var directory = Path.GetDirectoryName(fullPath)
+                ?? throw new InvalidOperationException("The target file has no parent directory.");
             Directory.CreateDirectory(directory);
-            var temporaryPath = Path.Combine(directory, "." + Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+
+            var temporaryPath = Path.Combine(
+                directory,
+                "." + Path.GetFileName(fullPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
             try
             {
                 File.WriteAllText(temporaryPath, content, new UTF8Encoding(false));
-                if (File.Exists(path)) File.Replace(temporaryPath, path, null);
-                else File.Move(temporaryPath, path);
+                if (File.Exists(fullPath)) File.Replace(temporaryPath, fullPath, null);
+                else File.Move(temporaryPath, fullPath);
             }
             finally
             {
@@ -71,81 +83,9 @@ namespace DucMinh.UnityMcp.Editor
             }
         }
 
-        private static string ResolveGitCommonDirectory(string gitDirectory)
+        private static bool IsReparsePoint(string path)
         {
-            var commonDirectoryFile = Path.Combine(gitDirectory, "commondir");
-            if (!File.Exists(commonDirectoryFile)) return gitDirectory;
-            var value = File.ReadAllText(commonDirectoryFile).Split('\n')[0].Trim();
-            if (value.Length == 0) throw new InvalidDataException("The Git commondir file is empty.");
-            var result = Path.GetFullPath(Path.IsPathRooted(value) ? value : Path.Combine(gitDirectory, value));
-            if (!Directory.Exists(result)) throw new DirectoryNotFoundException("The shared worktree Git directory was not found.");
-            return result;
-        }
-
-        private static bool IsTrackedByGit(string repositoryRoot, string configPath)
-        {
-            var relativePath = configPath.Substring(repositoryRoot.Length)
-                .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Replace('\\', '/');
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                WorkingDirectory = repositoryRoot,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            startInfo.ArgumentList.Add("ls-files");
-            startInfo.ArgumentList.Add("--error-unmatch");
-            startInfo.ArgumentList.Add("--");
-            startInfo.ArgumentList.Add(relativePath);
-
-            using (var process = Process.Start(startInfo))
-            {
-                if (process == null) throw new InvalidOperationException("Git could not be started to verify that the client config is local-only.");
-                if (!process.WaitForExit(5000))
-                {
-                    try { process.Kill(); } catch { }
-                    throw new TimeoutException("Git did not finish checking the client config within five seconds.");
-                }
-                if (process.ExitCode == 0) return true;
-                if (process.ExitCode == 1) return false;
-                var detail = process.StandardError.ReadToEnd().Trim();
-                throw new InvalidOperationException("Git could not verify the client config" + (detail.Length == 0 ? "." : ": " + detail));
-            }
-        }
-
-        private static bool TryFindGitDirectory(string projectRoot, out string repositoryRoot, out string gitDirectory)
-        {
-            var cursor = new DirectoryInfo(Path.GetFullPath(projectRoot));
-            while (cursor != null)
-            {
-                var candidate = Path.Combine(cursor.FullName, ".git");
-                if (Directory.Exists(candidate))
-                {
-                    repositoryRoot = cursor.FullName;
-                    gitDirectory = Path.GetFullPath(candidate);
-                    return true;
-                }
-                if (File.Exists(candidate))
-                {
-                    var firstLine = File.ReadAllText(candidate).Split('\n')[0].Trim();
-                    const string prefix = "gitdir:";
-                    if (!firstLine.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidDataException("The .git file does not contain a gitdir reference.");
-                    var value = firstLine.Substring(prefix.Length).Trim();
-                    repositoryRoot = cursor.FullName;
-                    gitDirectory = Path.GetFullPath(Path.IsPathRooted(value) ? value : Path.Combine(cursor.FullName, value));
-                    if (!Directory.Exists(gitDirectory)) throw new DirectoryNotFoundException("The worktree Git directory was not found.");
-                    return true;
-                }
-                cursor = cursor.Parent;
-            }
-
-            repositoryRoot = null;
-            gitDirectory = null;
-            return false;
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
         }
     }
 }

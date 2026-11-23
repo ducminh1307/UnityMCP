@@ -1,22 +1,83 @@
 ---
 name: unity-mcp
-description: Proactively use the project-scoped UnityMCP tools for every task or question involving the current Unity project, live Editor state, scenes, GameObjects, components, assets, packages, console, play mode, tests, builds, animation, UI, input, rendering, profiling, or Unity changes and verification. Trigger even when the user does not mention MCP. Prefer UnityMCP over guessing from files whenever live Unity data or an Editor operation is relevant. Do not trigger for tasks unrelated to Unity.
+description: Proactively use Unity CLI (when a shell is available) or the project-scoped Unity MCP server (`unity mcp`) for every task or question involving the current Unity project, live Editor state, scenes, GameObjects, components, assets, packages, console, play mode, tests, builds, animation, UI, input, rendering, profiling, or Unity changes and verification. Trigger even when the user does not mention MCP. Prefer Unity CLI or MCP over guessing from files whenever live Unity data or an Editor operation is relevant. Do not trigger for tasks unrelated to Unity.
 ---
 
 # UnityMCP
 
 <!-- UnityMCP managed project skill. -->
 
-Use the UnityMCP server configured for this project without requiring the user to ask for MCP explicitly.
+Use Unity's official **Unity CLI** (`unity`) and `com.unity.pipeline` extension commands provided by `com.ducminh.unity-mcp` proactively whenever working on this Unity project.
+
+## Choosing Unity CLI vs MCP
+
+- **When a shell is available**: prefer the **Unity CLI** directly (`unity status`, `unity command <group> <name>`, `unity recompile`, `unity test`, `unity build`). The CLI covers Editor lifecycle, compilation, testing, builds, and all Pipeline + extension commands.
+- **When using MCP** (or when no shell is available): use the project-scoped **`unity`** MCP server configured with `unity mcp --tool-groups --project-path <projectRoot>`.
 
 ## Workflow
 
-1. Identify the connected project server whose name begins with `unity_` and inspect its available tools.
-2. For work that depends on live Editor or project state, call `unity-status` first, then query the narrowest relevant UnityMCP read tools before answering or changing anything.
-3. Treat UnityMCP results as the source of truth for open scenes, hierarchy, objects, components, assets, packages, console messages, play mode, jobs, tests, builds, and other live Unity state. Do not infer these from files when an enabled MCP tool can answer.
-4. For changes, inspect the target state first, use dry-run behavior when the tool supports it, execute the smallest relevant operation, and verify the result through UnityMCP.
-5. For source-code edits, use normal repository tools as needed, then use UnityMCP to check compilation, console state, tests, assets, or scene effects when relevant.
-6. Use only tools currently advertised by the server. Never fabricate a result, silently substitute another open Unity project, enable disabled tools, or alter the local UnityMCP enablement profile.
-7. Only if the gateway, required tool, or MCP tool call returns an error or is unavailable, state that clearly to the user and switch to the safest project-file fallback that can still answer the request.
+1. Check live Editor / Pipeline readiness first:
+   - CLI: `unity status --json`
+   - MCP: query the `editor` / `pipeline` status tool on the `unity` server.
+2. Discover available commands and arguments dynamically instead of guessing:
+   - List groups/commands: `unity command`
+   - Search across CLI + live Editor commands: `unity command --query <term>`
+   - Inspect exact flags for any command: `unity command <group> <name> --help`
+3. Read before writing: query the narrowest read-only command (`scene`, `gameobject`, `component`, `console`, `asset`, `ui_ai inspect_ui`, etc.) before mutating anything.
+4. Mutate safely:
+   - Pass `--dry-run true` first on mutating commands that support previewing changes.
+   - Pass `--confirm true` only when the user intends destructive/overwriting actions (`checkpoint restore`, `particle save_prefab --overwrite true`, `addressables remove_entry`, `addressables build`).
+5. Verify after code or asset edits:
+   - Run `unity recompile` to check compilation errors.
+   - Check console logs (`unity command console ...`) and run relevant tests (`unity test`).
+6. Never fabricate results, silently target a different running Unity project, or bypass safety confirmations.
+7. Only if `unity` is unavailable, no Editor/Pipeline server is running, or a command errors, state the exact reason and fall back to the safest file-based inspection.
 
-Keep potentially destructive or unsafe operations explicit and scoped. Follow each tool's confirmation, `apply`, dry-run, and safety contract.
+## Built-In `com.unity.pipeline` Command Groups
+
+Use `unity command <group> <name>` (or the matching tool group in `unity mcp --tool-groups`):
+
+- **Editor & Play Mode**: `editor`, `editor.playmode`, `pipeline`, `job`, `diagnostics`, `runtime`
+- **Scenes & Objects**: `scene`, `gameobject`, `component`, `prefab`
+- **Assets & Materials**: `asset`, `material`, `authoring`
+- **Scripts & Verification**: `script`, `console`, `test`, `build`, `capture`
+- **Animation & Baking**: `animation.clip`, `animation.animator`, `animation.timeline`, `lighting`, `navmesh`, `occlusion`
+- **Project & Settings**: `package`, `settings`
+
+Top-level CLI commands (also usable without an open Editor or to drive lifecycle):
+- `unity status` — list running Editors and Pipeline ports
+- `unity recompile` — trigger script compilation and report compiler diagnostics
+- `unity test` — run EditMode / PlayMode tests
+- `unity build` — execute Unity builds
+- `unity command <group> <name> [args...]` — execute any Pipeline or extension command
+
+## `com.ducminh.unity-mcp` Extension Groups (19 Groups)
+
+### Always Available (Editor & Runtime)
+- **`particle`**: `create`, `get`, `configure`, `preview` (Runtime + Editor); `save_prefab` (Editor)
+- **`physics_ext`**: `get_collision_matrix`, `set_collision_matrix`, `raycast`, `overlap` (Runtime + Editor)
+- **`navmesh_ext`**: `calculate_path` (Runtime + Editor)
+
+### Always Available (Editor)
+- **`uitoolkit`**: `scan`, `edit_uxml`, `edit_uss`, `scaffold_controller`
+- **`ugui`**: `raycast`
+- **`scene_ext`**: `validate`, `analyze_complexity`
+- **`asset_ext`**: `get_dependencies`, `find_references`
+- **`render_ext`**: `get_settings`, `set_settings`, `generate_texture`
+- **`visual_ext`**: `capture_gameobject`, `capture_multiview`, `frame_debugger_events`
+- **`checkpoint`**: `create`, `list`, `diff`, `restore`
+
+### Conditional / Package-Gated Groups (Editor)
+- **`addressables`** (`com.unity.addressables`): `list_groups`, `create_group`, `add_entry`, `remove_entry`, `build`
+- **`localization`** (`com.unity.localization`): `list_tables`, `get_entry`, `set_entry`
+- **`terrain`** (`com.unity.modules.terrain`): `set_height`, `paint_texture`
+- **`sprite`** (`com.unity.2d.sprite`): `slice`
+- **`tilemap`** (`com.unity.modules.tilemap`): `set_tiles`
+- **`probuilder`** (`com.unity.probuilder`): `create`, `edit`
+- **`cinemachine`** (`com.unity.cinemachine`): `create`
+- **`vfxgraph`** (`com.unity.visualeffectgraph`): `set`
+- **`input_actions`** (`com.unity.inputsystem`): `get`, `create_action`
+
+## Independent Companion Packages
+
+- **`ui_ai`** (`com.ducminh.ui-maker`): Independent standalone package whose optional `DucMinh.UiMaker.Editor.Pipeline` assembly automatically registers `get_ui_catalog`, `rebuild_ui_catalog`, `build_ui_from_json`, `inspect_ui`, `patch_ui_node`, `scaffold_prefab_manifest`, `preview_ui`, `list_ui_screen_specs`, `save_ui_screen_spec`, and `load_ui_screen_spec` when installed alongside `com.unity.pipeline`.

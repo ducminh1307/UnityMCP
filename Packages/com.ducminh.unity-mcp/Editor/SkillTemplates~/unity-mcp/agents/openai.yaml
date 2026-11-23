@@ -1,7 +1,7 @@
 interface:
   display_name: "UnityMCP"
-  short_description: "Use live Unity project tools proactively"
-  default_prompt: "Use $unity-mcp to inspect the live Unity project and complete this Unity task."
+  short_description: "Use Unity CLI and MCP tools proactively"
+  default_prompt: "Use $unity-mcp to inspect and drive the Unity project via Unity CLI or unity mcp."
 
 policy:
   allow_implicit_invocation: true
