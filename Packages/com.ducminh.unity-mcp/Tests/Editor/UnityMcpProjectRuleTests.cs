@@ -26,7 +26,13 @@ namespace DucMinh.UnityMcp.Tests
                 StringAssert.Contains("Fallback Protocol", content);
                 StringAssert.Contains(UnityMcpProjectRule.ManagedMarker, content);
                 StringAssert.Contains("unity status --json", content);
+                StringAssert.Contains("unity command <group>", content);
                 StringAssert.Contains("unity command <group> <name>", content);
+                StringAssert.Contains("settings.*", content);
+                StringAssert.Contains("scene list_open", content);
+                StringAssert.Contains("scene get_hierarchy", content);
+                StringAssert.Contains("gameobject find", content);
+                StringAssert.Contains("component get_fields", content);
                 StringAssert.Contains("unity recompile", content);
                 StringAssert.Contains("unity test", content);
                 StringAssert.Contains("unity mcp --tool-groups", content);
@@ -123,7 +129,11 @@ namespace DucMinh.UnityMcp.Tests
                 StringAssert.Contains(UnityMcpAntigravityContext.StartMarker, content);
                 StringAssert.Contains(UnityMcpAntigravityContext.EndMarker, content);
                 StringAssert.Contains("unity status", content);
+                StringAssert.Contains("unity command <group>", content);
                 StringAssert.Contains("unity command <group> <name>", content);
+                StringAssert.Contains("scene list_open", content);
+                StringAssert.Contains("scene get_hierarchy", content);
+                StringAssert.Contains("settings.<domain>", content);
                 StringAssert.Contains("unity mcp --tool-groups", content);
                 StringAssert.DoesNotContain("127.0.0.1", content);
                 Assert.That(UnityMcpAntigravityContext.IsManaged(projectRoot), Is.True);

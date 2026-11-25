@@ -1,0 +1,7 @@
+interface:
+  display_name: "UI Maker Manifest Authoring"
+  short_description: "Configure UIPrefabManifest, AIMetadataConfig, and bridges"
+  default_prompt: "Use $ui-maker-manifest-authoring to configure UIPrefabManifest contracts, UICatalogRegistry, AIMetadataConfig, or versionDefines Editor Bridges."
+
+policy:
+  allow_implicit_invocation: true

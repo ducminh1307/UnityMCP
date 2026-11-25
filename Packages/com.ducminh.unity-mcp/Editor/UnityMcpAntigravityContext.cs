@@ -14,8 +14,9 @@ namespace DucMinh.UnityMcp.Editor
             + "## UnityMCP live-Unity workflow\n\n"
             + "For every task that queries, diagnoses, verifies, or changes Unity:\n\n"
             + "- **When a shell is available**, prefer the official **Unity CLI** (`unity status`, `unity command <group> <name>`, `unity recompile`, `unity test`, `unity build`) backed by `com.unity.pipeline` and `com.ducminh.unity-mcp` extension commands before inspecting raw serialized files or inferring live Editor state.\n"
+            + "- **Discover before calling**: run `unity command <group>` (or `--query <term>`) before calling an unfamiliar command — never guess names (unknown commands log `CommandNotFound` errors in the Unity Console). Common built-in read commands: `scene list_open`, `scene get_hierarchy` (includes each GameObject's `components`), `gameobject find`, `component get_fields`, `settings.<domain> get`, `console get`, `asset find`.\n"
             + "- **When using MCP** (or when shell access is unavailable), invoke the project-scoped `unity` MCP server (`unity mcp --tool-groups`).\n"
-            + "- Use project-file fallback only when no Editor/Pipeline server is running, the CLI/MCP command is unavailable, or the invocation returns an error. State the reason before falling back. After Unity changes, verify compilation (`unity recompile`), console output, or tests (`unity test`) via Unity CLI or MCP.\n"
+            + "- Use project-file fallback only when no Editor/Pipeline server is running, the CLI/MCP command is unavailable, or the invocation returns an error. State the reason before falling back. After Unity changes, verify compilation (`unity recompile`), console output (`unity command console get`), or tests (`unity test`) via Unity CLI or MCP.\n"
             + EndMarker + "\n";
 
         internal static bool TryWrite(string projectRoot, out string contextPath, out string error)

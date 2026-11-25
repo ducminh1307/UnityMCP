@@ -1,0 +1,7 @@
+interface:
+  display_name: "UI Maker"
+  short_description: "Build, patch, and preview Unity uGUI declaratively"
+  default_prompt: "Use $ui-maker to inspect the project UI catalog, compose or patch Unity uGUI screens declaratively, and verify with preview_ui."
+
+policy:
+  allow_implicit_invocation: true

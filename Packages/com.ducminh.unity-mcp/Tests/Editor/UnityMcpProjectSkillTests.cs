@@ -31,7 +31,13 @@ namespace DucMinh.UnityMcp.Tests
                 StringAssert.Contains("Trigger even when the user does not mention MCP", content);
                 StringAssert.Contains(UnityMcpProjectSkill.ManagedMarker, content);
                 StringAssert.Contains("unity status --json", content);
+                StringAssert.Contains("unity command <group>", content);
                 StringAssert.Contains("unity command <group> <name>", content);
+                StringAssert.Contains("scene list_open", content);
+                StringAssert.Contains("scene get_hierarchy", content);
+                StringAssert.Contains("gameobject find", content);
+                StringAssert.Contains("component get_fields", content);
+                StringAssert.Contains("settings.player", content);
                 StringAssert.Contains("unity mcp --tool-groups --project-path", content);
                 StringAssert.Contains("ui_ai", content);
                 StringAssert.DoesNotContain("unity-status", content);
